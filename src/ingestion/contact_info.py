@@ -9,15 +9,11 @@ Source: https://github.com/unitedstates/congress-legislators
 import asyncio
 import httpx
 import yaml
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 from datetime import datetime
 import logging
 
 from src.ingestion.base import BaseIngester
-from src.models.politician import Politician
-from src.config.settings import settings
-
-logger = logging.getLogger(__name__)
 
 
 class ContactInfoIngester(BaseIngester[dict]):
@@ -120,10 +116,15 @@ class ContactInfoIngester(BaseIngester[dict]):
         Returns:
             True if record was updated, False if not found
         """
-        bioguide_id = contact_info.pop("bioguide_id")
+        bioguide_id = contact_info.get("bioguide_id")
+        if not bioguide_id:
+            raise ValueError("Missing bioguide_id in contact info")
         
         # Remove None values (don't overwrite with empty data)
-        update_fields = {k: v for k, v in contact_info.items() if v is not None}
+        update_fields = {
+            k: v for k, v in contact_info.items()
+            if k != "bioguide_id" and v is not None
+        }
         
         if not update_fields:
             self.logger.debug(f"No contact info to update for {bioguide_id}")
@@ -146,9 +147,36 @@ class ContactInfoIngester(BaseIngester[dict]):
         
         if result.modified_count > 0:
             self.logger.debug(f"Updated contact info for {bioguide_id}")
-            return False  # It's an update, not insert
+            return True
         
+        self.logger.debug(f"No contact changes for {bioguide_id}")
         return False
+    
+    async def process_item(self, raw_data: dict) -> bool:
+        """
+        Process a single legislator, tracking only updates for stats.
+        """
+        try:
+            self.stats["processed"] += 1
+            
+            item = await self.transform(raw_data)
+            was_updated = await self.load(item)
+            
+            if was_updated:
+                self.stats["updated"] += 1
+            
+            if self.stats["processed"] % 50 == 0:
+                self.logger.info(
+                    f"Progress: {self.stats['processed']} processed, "
+                    f"{self.stats['updated']} updated"
+                )
+            
+            return True
+        except Exception as e:
+            self.stats["errors"] += 1
+            self.logger.error(f"Error processing item: {e}")
+            self.logger.debug(f"Raw data: {raw_data}")
+            return False
     
     async def run_enrichment(self) -> dict:
         """

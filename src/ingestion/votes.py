@@ -1,11 +1,12 @@
 """
 Ingester for congressional roll call votes.
 
-Fetches votes from Congress.gov and stores both the vote event
-and individual politician positions.
+Fetches votes from Congress.gov and individual member positions
+from House Clerk XML files.
 """
 import asyncio
 import httpx
+import xml.etree.ElementTree as ET
 from typing import AsyncGenerator, Optional
 from datetime import date, datetime
 import logging
@@ -22,7 +23,7 @@ class VotesIngester(BaseIngester[Vote]):
     """
     Ingest roll call votes from Congress.gov.
     
-    Fetches vote events and individual member positions.
+    Fetches vote events and individual member positions from House Clerk XML.
     """
     
     def __init__(self, congress: int = CURRENT_CONGRESS):
@@ -46,7 +47,7 @@ class VotesIngester(BaseIngester[Vote]):
             limit: Max votes to fetch total (None = all)
             
         Yields:
-            Raw vote data from API
+            Raw vote data from API with member votes
         """
         if chamber == "senate":
             self.logger.warning("Senate votes not yet available in Congress.gov API (beta)")
@@ -110,15 +111,18 @@ class VotesIngester(BaseIngester[Vote]):
                                     if detail_response.status_code == 200:
                                         vote_detail = detail_response.json().get("houseRollCallVote", {})
                                         
-                                        # Fetch member votes separately (correct URL format)
-                                        # Format: /house-vote/{congress}/{session}/{rollNumber}/member-votes
-                                        roll_num = vote_detail.get("rollCallNumber")
-                                        member_votes_url = f"{self.base_url}/house-vote/{self.congress}/{sess}/{roll_num}/member-votes"
-                                        member_response = await client.get(member_votes_url, params=detail_params)
-                                        
-                                        if member_response.status_code == 200:
-                                            member_data = member_response.json().get("houseRollCallVoteMemberVotes", {})
-                                            vote_detail["memberVotes"] = member_data.get("results", [])
+                                        # Fetch member votes from House Clerk XML
+                                        source_xml_url = vote_detail.get("sourceDataURL")
+                                        if source_xml_url:
+                                            try:
+                                                xml_response = await client.get(source_xml_url)
+                                                if xml_response.status_code == 200:
+                                                    # Parse XML to extract member votes
+                                                    member_votes = self._parse_house_clerk_xml(xml_response.text)
+                                                    vote_detail["memberVotes"] = member_votes
+                                                    self.logger.info(f"Fetched {len(member_votes)} member votes from XML")
+                                            except Exception as e:
+                                                self.logger.warning(f"Could not fetch member votes XML: {e}")
                                         
                                         yield vote_detail
                                         
@@ -145,7 +149,7 @@ class VotesIngester(BaseIngester[Vote]):
                         self.logger.error(f"Error: {e}")
                         self.stats["errors"] += 1
                         break
-        
+    
     async def transform(self, raw: dict) -> Vote:
         """
         Transform Congress.gov house-vote data to our Vote model.
@@ -242,7 +246,7 @@ class VotesIngester(BaseIngester[Vote]):
         )
         
         return result.upserted_id is not None
- 
+    
     async def process_item(self, raw_data: dict) -> bool:
         """
         Override to also save individual politician votes.
@@ -278,7 +282,7 @@ class VotesIngester(BaseIngester[Vote]):
         
         for member_vote in member_votes:
             bioguide_id = member_vote.get("bioguideId")
-            position = member_vote.get("voteCast")  # "Aye", "Nay", "Present", "Not Voting"
+            position = member_vote.get("voteCast")  # "Aye", "No", "Present", "Not Voting"
             
             if not bioguide_id or not position:
                 continue
@@ -295,6 +299,8 @@ class VotesIngester(BaseIngester[Vote]):
                 upsert=True
             )
         
+        self.logger.info(f"Saved {len(member_votes)} member votes for {vote_id}")
+    
     def _parse_date(self, date_str: Optional[str]) -> Optional[date]:
         """Parse date string to date object."""
         if not date_str:
@@ -307,6 +313,43 @@ class VotesIngester(BaseIngester[Vote]):
             return date.fromisoformat(date_str[:10])
         except:
             return None
+    
+    def _parse_house_clerk_xml(self, xml_text: str) -> list:
+        """
+        Parse House Clerk XML to extract member votes.
+        
+        Args:
+            xml_text: XML content from clerk.house.gov
+            
+        Returns:
+            List of dicts with bioguideId and voteCast
+        """
+        try:
+            root = ET.fromstring(xml_text)
+            
+            member_votes = []
+            
+            # Find all recorded-vote elements
+            for recorded_vote in root.findall('.//recorded-vote'):
+                legislator = recorded_vote.find('legislator')
+                vote_elem = recorded_vote.find('vote')
+                
+                if legislator is not None and vote_elem is not None:
+                    bioguide_id = legislator.get('name-id')
+                    vote_cast = vote_elem.text
+                    
+                    if bioguide_id and vote_cast:
+                        member_votes.append({
+                            'bioguideId': bioguide_id,
+                            'voteCast': vote_cast  # "Aye", "No", "Present", "Not Voting"
+                        })
+            
+            self.logger.debug(f"Parsed {len(member_votes)} member votes from XML")
+            return member_votes
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing House Clerk XML: {e}")
+            return []
 
 
 async def main():
@@ -316,7 +359,7 @@ async def main():
     ingester = VotesIngester(congress=CURRENT_CONGRESS)
     
     # Fetch 20 recent House votes for testing
-    stats = await ingester.run(chamber="house", limit=20)
+    stats = await ingester.run(chamber="house", limit=5)
     
     print("\n=== Sync Complete ===")
     print(f"Processed: {stats['processed']}")

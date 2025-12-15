@@ -14,8 +14,8 @@ from pathlib import Path
 # Ensure project root is in path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import the actual class name from votes.py
-from src.ingestion.votes import VotesIngester
+# Import the renamed class from your votes.py file
+from src.ingestion.votes import ReliableCongressionalIngester
 from src.config.constants import CURRENT_CONGRESS
 
 async def sync_votes(
@@ -24,7 +24,7 @@ async def sync_votes(
     max_votes_per_chamber: int = 100
 ):
     """
-    Sync roll call votes using the VotesIngester.
+    Sync roll call votes using the ReliableCongressionalIngester.
     """
     if chambers is None:
         chambers = ["house", "senate"]
@@ -43,7 +43,7 @@ async def sync_votes(
     }
     
     # Initialize the ingester once
-    ingester = VotesIngester(congress=congress)
+    ingester = ReliableCongressionalIngester(congress=congress)
     
     for chamber in chambers:
         print(f"\n🔍 Fetching {chamber.title()} votes...")

@@ -1,0 +1,19 @@
+👥 Syncing Politicians from Congress.gov
+============================================================
+State: UT
+
+📥 Fetching member list...
+   Found 0 members to sync
+
+🔄 Fetching detailed profiles...
+------------------------------------------------------------
+
+============================================================
+✅ Sync Complete!
+============================================================
+📊 Statistics:
+   • Processed:  0
+   • Inserted:   0 new records
+   • Updated:    0 records
+   • Errors:     0
+
