@@ -380,6 +380,7 @@ def create_all_indexes_sync(db: Database = None, drop_existing: bool = False):
 # ASYNC INDEX FUNCTIONS (for FastAPI, async scripts, etc.)
 # ============================================================================
 
+async def create_politicians_indexes(db: 'AsyncIOMotorDatabase'):
     """
     Create indexes for politicians collection.
     
