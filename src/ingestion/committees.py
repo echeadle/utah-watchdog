@@ -12,6 +12,7 @@ import logging
 from src.ingestion.base import BaseIngester
 from src.config.settings import settings
 from src.config.constants import CONGRESS_GOV_BASE_URL, CURRENT_CONGRESS
+from src.database.normalization import normalize_politician
 
 logger = logging.getLogger(__name__)
 
@@ -146,22 +147,47 @@ class CommitteeIngester(BaseIngester[dict]):
                 elif "Ranking" in member.get("title", ""):
                     role = "Ranking Member"
             
-            # Add committee to politician's record
-            await self.db.politicians.update_one(
+            # ✨ FETCH the current politician record first
+            politician = await self.db.politicians.find_one({"bioguide_id": bioguide_id})
+            
+            if not politician:
+                self.logger.warning(f"Politician {bioguide_id} not found, skipping committee assignment")
+                continue
+            
+            # Add committee to the politician's committees list
+            if "committees" not in politician:
+                politician["committees"] = []
+            
+            # Check if committee already exists
+            committee_exists = False
+            for existing_committee in politician["committees"]:
+                if existing_committee.get("code") == committee_code:
+                    # Update existing committee
+                    existing_committee["name"] = committee_name
+                    existing_committee["chamber"] = chamber
+                    existing_committee["role"] = role
+                    committee_exists = True
+                    break
+            
+            # If committee doesn't exist, add it
+            if not committee_exists:
+                politician["committees"].append({
+                    "code": committee_code,
+                    "name": committee_name,
+                    "chamber": chamber,
+                    "role": role
+                })
+            
+            # Update last_updated timestamp
+            politician["last_updated"] = datetime.utcnow()
+            
+            # ✨ NORMALIZE the entire politician record before updating
+            normalized = normalize_politician(politician)
+            
+            # ✨ UPDATE with the complete normalized record
+            await self.db.politicians.replace_one(
                 {"bioguide_id": bioguide_id},
-                {
-                    "$addToSet": {
-                        "committees": {
-                            "code": committee_code,
-                            "name": committee_name,
-                            "chamber": chamber,
-                            "role": role
-                        }
-                    },
-                    "$set": {
-                        "last_updated": datetime.utcnow()
-                    }
-                }
+                normalized
             )
         
         return False

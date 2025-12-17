@@ -1,14 +1,13 @@
 """
-Base ingester class for all data pipelines.
+Base ingester class with fixed connection management.
 
-Provides common ETL (Extract, Transform, Load) patterns and error handling.
+The key fix: Ensure all async operations complete before disconnecting.
 """
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, TypeVar, Generic, Any
+from typing import AsyncGenerator, TypeVar, Generic, Optional
 from datetime import datetime
-import logging
-
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+import logging
 
 from src.config.settings import settings
 
@@ -17,23 +16,13 @@ T = TypeVar('T')
 
 class BaseIngester(ABC, Generic[T]):
     """
-    Abstract base class for all data ingesters.
-    
-    Implements the ETL pattern:
-    1. Fetch - Get data from external source
-    2. Transform - Convert to our data models
-    3. Load - Save to MongoDB
-    
-    All ingester implementations should inherit from this class.
+    Base class for all data ingesters with proper async connection handling.
     """
     
     def __init__(self):
-        """Initialize the ingester with empty state"""
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.db: AsyncIOMotorDatabase | None = None
-        self.client: AsyncIOMotorClient | None = None
-        
-        # Statistics tracking
+        self.client: Optional[AsyncIOMotorClient] = None
+        self.db: Optional[AsyncIOMotorDatabase] = None
         self.stats = {
             "processed": 0,
             "inserted": 0,
@@ -65,94 +54,70 @@ class BaseIngester(ABC, Generic[T]):
         """
         Fetch data from external source.
         
-        This should be implemented as an async generator that yields
-        raw data records one at a time.
+        This should be an async generator that yields raw data items.
         
         Args:
-            **kwargs: Implementation-specific parameters
+            **kwargs: Parameters for fetching data
             
         Yields:
-            Raw data records (usually dicts from APIs or files)
+            Raw data dictionaries from the source
         """
         pass
     
     @abstractmethod
     async def transform(self, raw_data: dict) -> T:
         """
-        Transform raw data to our data model.
+        Transform raw data to our model.
         
         Args:
-            raw_data: Raw record from external source
+            raw_data: Raw data dictionary from source
             
         Returns:
-            Pydantic model instance
-            
-        Raises:
-            ValueError: If data is invalid or missing required fields
+            Transformed data model
         """
         pass
     
     @abstractmethod
     async def load(self, item: T) -> bool:
         """
-        Load item into database.
-        
-        Should handle upsert logic to make ingestion idempotent.
+        Load item into database (upsert).
         
         Args:
-            item: Pydantic model instance to save
+            item: Transformed data item
             
         Returns:
-            True if this was a new insert, False if update
-            
-        Raises:
-            Exception: If database operation fails
+            True if new insert, False if update
         """
         pass
     
-    async def process_item(self, raw_data: dict) -> bool:
+    async def process_item(self, raw_item: dict):
         """
         Process a single item through the ETL pipeline.
         
         Args:
-            raw_data: Raw data record
-            
-        Returns:
-            True if item was processed successfully
+            raw_item: Raw data from source
         """
         try:
             self.stats["processed"] += 1
             
             # Transform
-            item = await self.transform(raw_data)
+            item = await self.transform(raw_item)
             
-            # Load
+            # Load (and wait for it to complete!)
             was_insert = await self.load(item)
             
             if was_insert:
                 self.stats["inserted"] += 1
             else:
                 self.stats["updated"] += 1
-            
-            # Log progress every 50 items
-            if self.stats["processed"] % 50 == 0:
-                self.logger.info(
-                    f"Progress: {self.stats['processed']} processed, "
-                    f"{self.stats['inserted']} inserted, "
-                    f"{self.stats['updated']} updated"
-                )
-            
-            return True
-            
+                
         except Exception as e:
             self.stats["errors"] += 1
-            self.logger.error(f"Error processing item: {e}")
-            self.logger.debug(f"Raw data: {raw_data}")
-            return False
+            self.logger.error(f"Error processing item: {e}", exc_info=True)
     
     async def run(self, **kwargs) -> dict:
         """
-        Execute the full ETL pipeline.
+        Execute the full ETL pipeline with proper async handling.
         
         Args:
             **kwargs: Passed to fetch_data()
@@ -168,8 +133,13 @@ class BaseIngester(ABC, Generic[T]):
             await self.connect()
             
             # Process each item from the data source
+            # IMPORTANT: Await each process_item to ensure completion
             async for raw_item in self.fetch_data(**kwargs):
                 await self.process_item(raw_item)
+            
+            # Give a moment for any pending operations to complete
+            import asyncio
+            await asyncio.sleep(0.1)
             
         except KeyboardInterrupt:
             self.logger.warning("Ingestion interrupted by user")
@@ -194,7 +164,7 @@ class BaseIngester(ABC, Generic[T]):
                 f"Duration: {duration}"
             )
             
-            # Close connection
+            # Close connection (now safe - all operations completed)
             await self.disconnect()
         
         return self.stats

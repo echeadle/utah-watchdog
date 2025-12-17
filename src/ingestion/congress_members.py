@@ -14,6 +14,7 @@ from src.ingestion.base import BaseIngester
 from src.models.politician import Politician, Chamber, Party
 from src.config.settings import settings
 from src.config.constants import CONGRESS_GOV_BASE_URL, US_STATES
+from src.database.normalization import normalize_politician
 
 logger = logging.getLogger(__name__)
 
@@ -207,10 +208,17 @@ class CongressMembersIngester(BaseIngester[Politician]):
                 f"for {politician.full_name}'s seat"
             )
         
-        # Now upsert the current member
+        # Convert Pydantic model to dict
+        politician_data = politician.model_dump()
+        
+        # ✨ NORMALIZE the politician data before saving
+        # This ensures consistent formats for state, party, chamber
+        normalized_data = normalize_politician(politician_data)
+        
+        # Now upsert the current member with normalized data
         result = await collection.update_one(
             {"bioguide_id": politician.bioguide_id},
-            {"$set": politician.model_dump()},
+            {"$set": normalized_data},
             upsert=True
         )
         
