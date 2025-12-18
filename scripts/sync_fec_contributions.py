@@ -1,21 +1,12 @@
 """
-Sync FEC campaign contributions for all politicians with FEC IDs.
+FIXED: Sync FEC campaign contributions with bioguide_id linking.
 
-This script fetches contribution data from the FEC API for all politicians
-that have fec_candidate_id populated.
+This version passes bioguide_id to the ingester so contributions can be
+properly linked to politicians.
 
 Usage:
-    # Sync 2024 contributions for all politicians
-    uv run python scripts/sync_fec_contributions.py --cycle 2024
-    
-    # Sync for specific politicians (testing)
-    uv run python scripts/sync_fec_contributions.py --cycle 2024 --limit 5
-    
-    # Sync multiple cycles
-    uv run python scripts/sync_fec_contributions.py --cycle 2024 --cycle 2022
-    
-    # Dry run (see what would be synced)
-    uv run python scripts/sync_fec_contributions.py --cycle 2024 --dry-run
+    # Delete old contributions without bioguide_id and re-sync
+    uv run python scripts/sync_fec_contributions_FIXED.py --cycle 2024 --limit 3
 """
 import asyncio
 import sys
@@ -36,7 +27,8 @@ async def get_politicians_with_fec_ids(limit: int = None):
     db = client[settings.MONGODB_DATABASE]
     
     query = {
-        "fec_candidate_id": {"$exists": True, "$ne": None}
+        "fec_candidate_id": {"$exists": True, "$ne": None},
+        "bioguide_id": {"$exists": True, "$ne": None}
     }
     
     cursor = db.politicians.find(query)
@@ -60,25 +52,28 @@ async def sync_contributions_for_politician(
     Sync contributions for a single politician.
     
     Args:
-        politician: Politician document with fec_candidate_id
+        politician: Politician document with fec_candidate_id AND bioguide_id
         cycle: Election cycle (e.g., 2024)
         max_pages: Maximum pages to fetch (None = all)
         dry_run: If True, don't actually save data
     """
     name = politician.get("full_name")
     fec_id = politician.get("fec_candidate_id")
+    bioguide_id = politician.get("bioguide_id")
     state = politician.get("state")
     party = politician.get("party")
     
     print(f"\n📊 {name} ({party}-{state})")
     print(f"   FEC ID: {fec_id}")
+    print(f"   Bioguide ID: {bioguide_id}")
     print(f"   Cycle: {cycle}")
     
     if dry_run:
         print(f"   [DRY RUN] Would fetch contributions...")
         return {"processed": 0, "inserted": 0, "updated": 0, "errors": 0}
     
-    ingester = FECIngester()
+    # FIXED: Pass bioguide_id to ingester
+    ingester = FECIngester(bioguide_id=bioguide_id)
     
     try:
         stats = await ingester.run(
@@ -96,6 +91,7 @@ async def sync_contributions_for_politician(
         
     except Exception as e:
         print(f"   ❌ Error: {e}")
+        logging.exception(f"Error syncing {name}")
         return {"processed": 0, "inserted": 0, "updated": 0, "errors": 1}
 
 
@@ -103,7 +99,8 @@ async def sync_all_contributions(
     cycles: list[int],
     limit: int = None,
     max_pages: int = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    clean_first: bool = False
 ):
     """
     Sync contributions for all politicians with FEC IDs.
@@ -113,14 +110,26 @@ async def sync_all_contributions(
         limit: Limit number of politicians to process
         max_pages: Max pages per politician (None = all available)
         dry_run: If True, don't actually save data
+        clean_first: If True, delete old contributions without bioguide_id
     """
     print("=" * 60)
-    print("💰 FEC CAMPAIGN CONTRIBUTIONS SYNC")
+    print("💰 FEC CAMPAIGN CONTRIBUTIONS SYNC (FIXED)")
     print("=" * 60)
     
     if not settings.FEC_API_KEY:
         print("❌ FEC_API_KEY not found in settings!")
         return
+    
+    # Clean old contributions if requested
+    if clean_first and not dry_run:
+        print("\n🧹 Cleaning old contributions without bioguide_id...")
+        client = AsyncIOMotorClient(settings.MONGODB_URI)
+        db = client[settings.MONGODB_DATABASE]
+        
+        result = await db.contributions.delete_many({"bioguide_id": None})
+        print(f"   Deleted {result.deleted_count} contributions")
+        
+        client.close()
     
     # Get politicians with FEC IDs
     print(f"\n🔍 Finding politicians with FEC IDs...")
@@ -187,7 +196,7 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Sync FEC campaign contributions"
+        description="Sync FEC campaign contributions (FIXED with bioguide_id linking)"
     )
     parser.add_argument(
         "--cycle",
@@ -204,6 +213,11 @@ async def main():
         "--max-pages",
         type=int,
         help="Max pages per politician (100 contributions per page)"
+    )
+    parser.add_argument(
+        "--clean-first",
+        action="store_true",
+        help="Delete old contributions without bioguide_id before syncing"
     )
     parser.add_argument(
         "--dry-run",
@@ -233,7 +247,8 @@ async def main():
             cycles=cycles,
             limit=args.limit,
             max_pages=args.max_pages,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            clean_first=args.clean_first
         )
         
     except KeyboardInterrupt:

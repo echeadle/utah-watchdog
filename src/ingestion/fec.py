@@ -32,12 +32,13 @@ class FECIngester(BaseIngester[Contribution]):
     
     BASE_URL = "https://api.open.fec.gov/v1"
     
-    def __init__(self, candidate_name: Optional[str] = None):
+    def __init__(self, candidate_name: Optional[str] = None, bioguide_id: Optional[str] = None):
         super().__init__()
         self.api_key = settings.FEC_API_KEY
         if not self.api_key:
             raise ValueError("FEC_API_KEY not found in settings")
         self.candidate_name = candidate_name  # Cache candidate name
+        self.bioguide_id = bioguide_id  # Store bioguide_id for linking
     
     async def fetch_candidate_name(self, candidate_id: str) -> str:
         """
@@ -212,7 +213,7 @@ class FECIngester(BaseIngester[Contribution]):
             id=contrib_id,
             recipient_name=recipient_name,
             recipient_id=None,  # FEC doesn't provide CRP ID
-            bioguide_id=None,  # We'll need to map this separately
+            bioguide_id=self.bioguide_id,  # FIXED: Use the bioguide_id passed to constructor
             committee_id=raw.get("committee_id"),
             contributor_name=raw.get("contributor_name") or "Unknown",
             contributor_type=contrib_type,
