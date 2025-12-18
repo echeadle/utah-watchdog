@@ -80,7 +80,7 @@ class FECIngester(BaseIngester[Contribution]):
         committee_id: Optional[str] = None,
         cycle: int = 2024,
         per_page: int = 100,
-        max_pages: int = 10
+        max_pages: Optional[int] = 10
     ) -> AsyncGenerator[dict, None]:
         """
         Fetch individual contributions from FEC API.
@@ -90,7 +90,7 @@ class FECIngester(BaseIngester[Contribution]):
             committee_id: FEC committee ID (alternative to candidate_id)
             cycle: Election cycle year (e.g., 2024)
             per_page: Results per page (max 100)
-            max_pages: Maximum pages to fetch (to avoid huge downloads)
+            max_pages: Maximum pages to fetch (None = unlimited, but be careful!)
         
         Yields:
             Raw contribution dictionaries from FEC API
@@ -108,7 +108,11 @@ class FECIngester(BaseIngester[Contribution]):
         async with httpx.AsyncClient(timeout=30.0) as client:
             page = 1
             
-            while page <= max_pages:
+            while True:  # Changed from while page <= max_pages
+                # Check max_pages limit
+                if max_pages is not None and page > max_pages:
+                    self.logger.info(f"Reached max_pages limit ({max_pages})")
+                    break
                 params = {
                     "api_key": self.api_key,
                     "two_year_transaction_period": cycle,
@@ -172,8 +176,17 @@ class FECIngester(BaseIngester[Contribution]):
         date_str = raw.get("contribution_receipt_date")
         contrib_date = datetime.fromisoformat(date_str.replace("Z", "")).date() if date_str else date.today()
         
-        # Amount
-        amount = Decimal(str(raw.get("contribution_receipt_amount", 0)))
+        # Amount - FIXED: handle None/empty values properly
+        amount_raw = raw.get("contribution_receipt_amount")
+        if amount_raw is None or amount_raw == "":
+            amount = Decimal("0")
+            self.logger.debug(f"Missing amount for contribution, using 0")
+        else:
+            try:
+                amount = Decimal(str(amount_raw))
+            except (ValueError, TypeError, decimal.InvalidOperation) as e:
+                self.logger.warning(f"Invalid amount '{amount_raw}': {e}, using 0")
+                amount = Decimal("0")
         
         # Determine contribution type
         entity_type = raw.get("entity_type", "")

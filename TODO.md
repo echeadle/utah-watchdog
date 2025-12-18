@@ -3,32 +3,30 @@
 A phased task list for building the Government Watchdog application.
 This is a learning project - expect to revise and reprioritize as we go!
 
--   ✅ Updated TODO.md
-
 ---
 
 ## Phase 1: Core Infrastructure (Foundation)
 
 These need to work before anything else.
 
--   [x] Create normalization module (`src/database/normalization.py`)
--   [x] Integrate normalization into `congress_members.py`
--   [x] Integrate normalization into `fec.py`
--   [x] Integrate normalization into `congress_bills.py`
--   [x] Verify `committees.py` has normalization (already done)
--   [ ] Create database indexes for common queries
-    -   [ ] Politicians: `bioguide_id`, `state`, `party`, `chamber`, `in_office`
-    -   [ ] Legislation: `bill_id`, `sponsor_bioguide_id`, `status`, `congress`
-    -   [ ] Contributions: `bioguide_id`, `contributor_state`, `cycle`
-    -   [ ] Votes: `vote_id`, `bill_id`, `chamber`
-    -   [ ] Politician_votes: `vote_id`, `bioguide_id`
+-   ✅ Create normalization module (`src/database/normalization.py`)
+-   ✅ Integrate normalization into `congress_members.py`
+-   ✅ Integrate normalization into `fec.py`
+-   ✅ Integrate normalization into `congress_bills.py`
+-   ✅ Verify `committees.py` has normalization (already done)
+-   ✅ Create database indexes for common queries
+    -   ✅ Politicians: `bioguide_id`, `state`, `party`, `chamber`, `in_office`
+    -   ✅ Legislation: `bill_id`, `sponsor_bioguide_id`, `status`, `congress`
+    -   ✅ Contributions: `bioguide_id`, `contributor_state`, `cycle`
+    -   ✅ Votes: `vote_id`, `bill_id`, `chamber`
+    -   ✅ Politician_votes: `vote_id`, `bioguide_id`
 -   [ ] Verify all sync scripts work end-to-end
-    -   [ ] `sync_members.py`
-    -   [ ] `sync_bills.py`
-    -   [ ] `sync_votes.py`
-    -   [ ] `sync_committees.py`
-    -   [ ] `sync_contact_info.py`
-    -   [ ] `sync_fec.py` (if exists)
+    -   ✅ `sync_members.py`
+    -   ✅ `sync_bills.py`
+    -   ✅ `sync_votes.py` - ⚠️ House only (Senate API not available yet)
+    -   ✅ `sync_committees.py`
+    -   ✅ `enrich_contact_info.py` (enriches existing politicians)
+    -   ✅ `sync_fec.py` (if exists)
 
 ---
 
@@ -36,10 +34,10 @@ These need to work before anything else.
 
 Fill gaps in the data to make the app useful.
 
--   [ ] Sync FEC candidate IDs for all politicians
+-   ✅ Sync FEC candidate IDs for all politicians
     -   Currently only 87 of 539 politicians have FEC IDs
     -   Need a script to match bioguide_id → fec_candidate_id
--   [ ] Fetch contributions for more politicians (not just Mike Lee)
+-   ✅ Fetch contributions for more politicians (not just Mike Lee)
     -   [ ] All Utah delegation
     -   [ ] Expand to other states as needed
 -   [ ] Senate votes

@@ -2,12 +2,15 @@
 Campaign Finance page - track political contributions.
 
 Shows campaign contributions, top donors, and allows searching by employer/state.
+Enhanced with charts and visualizations.
 """
 import streamlit as st
 from pymongo import MongoClient
 from datetime import datetime
 from decimal import Decimal
 from collections import defaultdict
+import pandas as pd
+import plotly.express as px
 
 from src.config.settings import settings
 
@@ -44,6 +47,9 @@ def get_politicians_with_contributions():
     
     # Find politicians with contributions (using bioguide_id field)
     politicians_with_data = db.contributions.distinct("bioguide_id")
+    
+    # Filter out None values
+    politicians_with_data = [p for p in politicians_with_data if p is not None]
     
     if not politicians_with_data:
         return []
@@ -202,6 +208,7 @@ def get_recent_contributions(bioguide_id: str, limit: int = 20):
 
 
 def search_contributions(
+    bioguide_id: str = None,
     employer: str = None,
     state: str = None,
     min_amount: float = None,
@@ -213,6 +220,9 @@ def search_contributions(
     
     filter_dict = {}
     
+    if bioguide_id:
+        filter_dict["bioguide_id"] = bioguide_id
+    
     if employer:
         filter_dict["contributor_employer"] = {"$regex": employer, "$options": "i"}
     
@@ -222,9 +232,9 @@ def search_contributions(
     if min_amount is not None or max_amount is not None:
         filter_dict["amount"] = {}
         if min_amount is not None:
-            filter_dict["amount"]["$gte"] = Decimal(str(min_amount))
+            filter_dict["amount"]["$gte"] = float(min_amount)
         if max_amount is not None:
-            filter_dict["amount"]["$lte"] = Decimal(str(max_amount))
+            filter_dict["amount"]["$lte"] = float(max_amount)
     
     results = list(db.contributions.find(filter_dict)
                    .sort("amount", -1)
@@ -266,127 +276,153 @@ def get_overall_stats():
 
 
 # ============================================================================
-# UI Components
+# Display Functions
 # ============================================================================
 
 def display_contribution_summary(politician: dict, summary: dict):
-    """Display summary metrics for a politician"""
-    
+    """Display contribution summary metrics"""
     col1, col2, col3 = st.columns(3)
     
     with col1:
         st.metric(
             "Total Raised",
             f"${summary['total_raised']:,.2f}",
-            help="Total campaign contributions in database"
+            help="Total amount raised from all contributions"
         )
     
     with col2:
         st.metric(
-            "Number of Contributions",
+            "Contributions",
             f"{summary['num_contributions']:,}",
-            help="Total number of individual contributions"
+            help="Number of individual contributions"
         )
     
     with col3:
         st.metric(
-            "Average Contribution",
+            "Average Amount",
             f"${summary['avg_contribution']:,.2f}",
-            help="Average amount per contribution"
+            help="Average contribution amount"
         )
 
 
 def display_top_donors_table(donors: list):
     """Display top donors in a table"""
-    
     if not donors:
         st.info("No donor data available")
         return
     
-    st.markdown("### 💳 Top Individual Contributors")
+    st.markdown("### 💳 Top Individual Donors")
+    st.caption("Individuals who have contributed the most")
     
-    # Create table
     for i, donor in enumerate(donors, 1):
-        with st.container():
-            col1, col2, col3 = st.columns([3, 2, 1])
-            
-            with col1:
-                st.markdown(f"**{i}. {donor['name']}**")
-                location = f"{donor['city']}, {donor['state']}" if donor['city'] else donor['state']
-                if location:
-                    st.caption(f"📍 {location}")
-            
-            with col2:
-                st.write(f"**Employer:** {donor['employer']}")
-            
-            with col3:
-                st.metric("Total", f"${donor['total_amount']:,.2f}")
-                if donor['num_contributions'] > 1:
-                    st.caption(f"{donor['num_contributions']} contributions")
-            
-            st.divider()
+        col1, col2, col3 = st.columns([4, 2, 1])
+        
+        with col1:
+            st.markdown(f"**{i}. {donor['name']}**")
+            st.caption(f"Employer: {donor['employer']}")
+            if donor['city'] and donor['state']:
+                st.caption(f"📍 {donor['city']}, {donor['state']}")
+        
+        with col2:
+            st.metric("Total Given", f"${donor['total_amount']:,.2f}")
+        
+        with col3:
+            st.metric("Times", donor['num_contributions'])
+        
+        st.divider()
 
 
 def display_top_employers_table(employers: list):
-    """Display top employers/organizations"""
-    
+    """Display top employers in a table with chart"""
     if not employers:
         st.info("No employer data available")
         return
     
-    st.markdown("### 🏢 Top Employers/Organizations")
+    st.markdown("### 🏢 Top Contributing Employers")
+    st.caption("Employers whose employees contribute the most")
     
-    for i, emp in enumerate(employers, 1):
-        col1, col2, col3 = st.columns([4, 1, 1])
+    # Create bar chart
+    if len(employers) >= 3:
+        df = pd.DataFrame(employers)
+        fig = px.bar(
+            df,
+            x='total_amount',
+            y='employer',
+            orientation='h',
+            title='Top 10 Employers by Total Contributions',
+            labels={'total_amount': 'Total Amount ($)', 'employer': 'Employer'},
+            color='total_amount',
+            color_continuous_scale='Blues'
+        )
+        fig.update_layout(height=400, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Display table
+    for i, employer in enumerate(employers, 1):
+        col1, col2, col3 = st.columns([3, 2, 1])
         
         with col1:
-            st.markdown(f"**{i}. {emp['employer']}**")
+            st.markdown(f"**{i}. {employer['employer']}**")
         
         with col2:
-            st.metric("Total", f"${emp['total_amount']:,.2f}")
+            st.metric("Total", f"${employer['total_amount']:,.2f}")
         
         with col3:
-            st.caption(f"{emp['num_contributors']} contributors")
+            st.metric("Contributors", employer['num_contributors'])
         
         st.divider()
 
 
 def display_state_breakdown(states: list):
-    """Display contributions by state"""
-    
+    """Display contributions by state with map visualization"""
     if not states:
         st.info("No state data available")
         return
     
     st.markdown("### 🗺️ Contributions by State")
+    st.caption("Where contributions are coming from")
     
-    for state_data in states:
-        col1, col2, col3 = st.columns([1, 2, 1])
+    # Create horizontal bar chart
+    if len(states) >= 3:
+        df = pd.DataFrame(states)
+        fig = px.bar(
+            df,
+            x='total_amount',
+            y='state',
+            orientation='h',
+            title='Top States by Total Contributions',
+            labels={'total_amount': 'Total Amount ($)', 'state': 'State'},
+            color='total_amount',
+            color_continuous_scale='Greens'
+        )
+        fig.update_layout(height=500, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Display table
+    st.markdown("#### State Breakdown")
+    for i, state_data in enumerate(states, 1):
+        col1, col2, col3 = st.columns([2, 2, 2])
         
         with col1:
-            st.markdown(f"**{state_data['state']}**")
+            st.markdown(f"**{i}. {state_data['state']}**")
         
         with col2:
-            # Progress bar
-            max_amount = states[0]['total_amount'] if states else 1
-            progress = state_data['total_amount'] / max_amount
-            st.progress(progress)
+            st.metric("Amount", f"${state_data['total_amount']:,.2f}")
         
         with col3:
-            st.write(f"${state_data['total_amount']:,.2f}")
-            st.caption(f"{state_data['num_contributions']} contributions")
+            st.metric("Contributions", state_data['num_contributions'])
         
         st.divider()
 
 
 def display_recent_contributions(contributions: list):
     """Display recent contributions"""
-    
     if not contributions:
         st.info("No recent contributions")
         return
     
     st.markdown("### ⏱️ Recent Contributions")
+    st.caption("Most recent individual contributions")
     
     for contrib in contributions:
         col1, col2, col3 = st.columns([3, 1, 1])
@@ -426,7 +462,19 @@ def main():
     
     if stats["total_contributions"] == 0:
         st.warning("⚠️ No contribution data in database yet.")
-        st.info("Run the campaign finance sync script to populate data.")
+        st.info("""
+        **To populate contribution data:**
+        
+        1. Make sure politicians have FEC IDs:
+           ```bash
+           uv run python scripts/populate_fec_ids.py
+           ```
+        
+        2. Sync contributions:
+           ```bash
+           uv run python scripts/sync_fec_contributions.py --cycle 2024
+           ```
+        """)
         return
     
     # Display overall stats in sidebar
@@ -439,8 +487,13 @@ def main():
         st.divider()
         
         st.markdown("## ℹ️ Data Source")
-        st.caption("Campaign finance data from FEC filings and OpenSecrets")
+        st.caption("Campaign finance data from FEC filings")
         st.caption("Data may be incomplete or delayed")
+        
+        st.divider()
+        
+        st.markdown("## 💡 Tip")
+        st.caption("Use the search feature at the bottom to find contributions by employer, state, or amount range")
     
     # ========================================================================
     # Politician Selector
@@ -452,6 +505,7 @@ def main():
     
     if not politicians:
         st.error("No politicians with contribution data found")
+        st.info("Run `populate_fec_ids.py` and `sync_fec_contributions.py` to add data")
         return
     
     # Create dropdown options
@@ -473,12 +527,11 @@ def main():
     politician = politician_options[selected_name]
     bioguide_id = politician["bioguide_id"]
     
-    # Fetch full politician details from database to ensure we have all fields
+    # Fetch full politician details from database
     db = get_db()
     full_politician = db.politicians.find_one({"bioguide_id": bioguide_id})
     
     if full_politician:
-        # Use the full record from database
         politician = full_politician
     
     st.divider()
@@ -489,16 +542,12 @@ def main():
     
     st.header(f"💰 {politician.get('full_name', 'Unknown')}")
     
-    # Get party and state with fallbacks
+    # Get party and state
     party = politician.get('party', '?')
     state = politician.get('state', '??')
+    chamber = politician.get('chamber', '').title()
     
-    # Display party affiliation
-    if party and party != "Unknown":
-        st.caption(f"{party}-{state}")
-    else:
-        st.caption(f"⚠️ Party Unknown - {state}")
-        st.info("💡 Tip: Update this politician's party field in the database")
+    st.caption(f"{chamber} • {party}-{state}")
     
     # Get contribution summary
     summary = get_contribution_summary(bioguide_id)
@@ -523,7 +572,7 @@ def main():
         display_top_donors_table(top_donors)
     
     with tab2:
-        top_employers = get_top_employers(bioguide_id, limit=15)
+        top_employers = get_top_employers(bioguide_id, limit=10)
         display_top_employers_table(top_employers)
     
     with tab3:
@@ -539,8 +588,8 @@ def main():
     # ========================================================================
     
     st.divider()
-    st.header("🔍 Search Contributions")
-    st.markdown("Search all contributions by employer, state, or amount")
+    st.header("🔍 Search All Contributions")
+    st.markdown("Search across all contributions in the database")
     
     search_col1, search_col2 = st.columns(2)
     
@@ -599,10 +648,13 @@ def main():
             # Display results
             for contrib in search_results:
                 # Get politician name
-                pol = get_db().politicians.find_one(
-                    {"bioguide_id": contrib["bioguide_id"]},
-                    {"full_name": 1, "party": 1, "state": 1}
-                )
+                pol_bioguide = contrib.get("bioguide_id")
+                pol = None
+                if pol_bioguide:
+                    pol = db.politicians.find_one(
+                        {"bioguide_id": pol_bioguide},
+                        {"full_name": 1, "party": 1, "state": 1}
+                    )
                 
                 col1, col2, col3 = st.columns([3, 1, 1])
                 
@@ -614,16 +666,16 @@ def main():
                     st.caption(f"Employer: {employer}")
                     
                     if pol:
-                        st.caption(f"→ To: {pol['full_name']} ({pol['party']}-{pol['state']})")
+                        st.caption(f"→ To: {pol.get('full_name', 'Unknown')} ({pol.get('party', '?')}-{pol.get('state', '?')})")
                 
                 with col2:
                     amount = float(contrib.get("amount", 0))
                     st.metric("Amount", f"${amount:,.2f}")
                 
                 with col3:
-                    state = contrib.get("contributor_state", "")
-                    if state:
-                        st.write(f"📍 {state}")
+                    state_code = contrib.get("contributor_state", "")
+                    if state_code:
+                        st.write(f"📍 {state_code}")
                     
                     date = contrib.get("contribution_date")
                     if date and isinstance(date, datetime):
