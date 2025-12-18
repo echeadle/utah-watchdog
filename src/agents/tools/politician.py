@@ -2,10 +2,13 @@
 Agent tools for querying politician data.
 
 These functions are used by the AI agent to answer questions about politicians.
+
+FIXED: Changed from $regex to re.compile() for name searches.
 """
 from typing import Optional, List, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -51,17 +54,20 @@ async def lookup_politician(
     query = {}
     
     # Name search (case-insensitive, partial match)
+    # FIXED: Use re.compile instead of $regex
     if name:
+        name_pattern = re.compile(name, re.IGNORECASE)
         query["$or"] = [
-            {"full_name": {"$regex": name, "$options": "i"}},
-            {"first_name": {"$regex": name, "$options": "i"}},
-            {"last_name": {"$regex": name, "$options": "i"}}
+            {"full_name": name_pattern},
+            {"first_name": name_pattern},
+            {"last_name": name_pattern}
         ]
     
     # State filter (handle both full name and abbreviation)
     if state:
-        # Try to match both the full state name and abbreviation
-        query["state"] = {"$regex": f"^{state}$", "$options": "i"}
+        # Try exact match first (handles both "UT" and "Utah" if normalized)
+        state_upper = state.upper()
+        query["state"] = state_upper
     
     # Party filter
     if party:
@@ -200,15 +206,18 @@ def lookup_politician_sync(
     # Build query
     query = {}
     
+    # FIXED: Use re.compile instead of $regex
     if name:
+        name_pattern = re.compile(name, re.IGNORECASE)
         query["$or"] = [
-            {"full_name": {"$regex": name, "$options": "i"}},
-            {"first_name": {"$regex": name, "$options": "i"}},
-            {"last_name": {"$regex": name, "$options": "i"}}
+            {"full_name": name_pattern},
+            {"first_name": name_pattern},
+            {"last_name": name_pattern}
         ]
     
     if state:
-        query["state"] = {"$regex": f"^{state}$", "$options": "i"}
+        state_upper = state.upper()
+        query["state"] = state_upper
     
     if party:
         query["party"] = party.upper()
