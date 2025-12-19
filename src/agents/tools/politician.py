@@ -54,14 +54,25 @@ async def lookup_politician(
     query = {}
     
     # Name search (case-insensitive, partial match)
-    # FIXED: Use re.compile instead of $regex
+    # FIXED: Split name into words and search for all of them
     if name:
-        name_pattern = re.compile(name, re.IGNORECASE)
-        query["$or"] = [
-            {"full_name": name_pattern},
-            {"first_name": name_pattern},
-            {"last_name": name_pattern}
-        ]
+        # Split the search name into words (handles "Mike Lee", "Terri Sewell", etc.)
+        name_words = name.strip().split()
+        
+        # Build regex that matches if ALL words appear in the full name
+        # This handles middle initials: "Terri Sewell" matches "Terri A. Sewell"
+        name_patterns = [re.compile(re.escape(word), re.IGNORECASE) for word in name_words]
+        
+        # Match if ALL search words are found in any name field
+        name_conditions = []
+        for field in ["full_name", "first_name", "last_name"]:
+            # All words must match this field
+            field_condition = {
+                "$and": [{field: pattern} for pattern in name_patterns]
+            }
+            name_conditions.append(field_condition)
+        
+        query["$or"] = name_conditions
     
     # State filter (handle both full name and abbreviation)
     if state:
@@ -206,14 +217,19 @@ def lookup_politician_sync(
     # Build query
     query = {}
     
-    # FIXED: Use re.compile instead of $regex
+    # FIXED: Split name into words for better matching
     if name:
-        name_pattern = re.compile(name, re.IGNORECASE)
-        query["$or"] = [
-            {"full_name": name_pattern},
-            {"first_name": name_pattern},
-            {"last_name": name_pattern}
-        ]
+        name_words = name.strip().split()
+        name_patterns = [re.compile(re.escape(word), re.IGNORECASE) for word in name_words]
+        
+        name_conditions = []
+        for field in ["full_name", "first_name", "last_name"]:
+            field_condition = {
+                "$and": [{field: pattern} for pattern in name_patterns]
+            }
+            name_conditions.append(field_condition)
+        
+        query["$or"] = name_conditions
     
     if state:
         state_upper = state.upper()
