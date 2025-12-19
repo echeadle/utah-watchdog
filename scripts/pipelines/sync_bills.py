@@ -1,7 +1,8 @@
 """
 Script to sync bills from Congress.gov.
 
-Run this to populate or update the legislation collection.
+FIXED: Creates new ingester instance for each bill type to avoid
+"Cannot use MongoClient after close" error.
 
 Usage:
     uv run python scripts/sync_bills.py                    # All bill types, last 100
@@ -53,8 +54,9 @@ async def sync_bills(
         print(f"\n🔍 Fetching {bill_type.upper()} bills...")
         print("-" * 60)
         
-        # FIXED: Create a NEW ingester for each bill type
-        # (The old one's database connection was closed after run())
+        # ✨ FIX: Create a NEW ingester for each bill type
+        # This ensures each bill type gets a fresh database connection
+        # and avoids "Cannot use MongoClient after close" error
         ingester = CongressBillsIngester(congress=congress)
         
         stats = await ingester.run(
@@ -67,6 +69,8 @@ async def sync_bills(
             total_stats[key] += stats.get(key, 0)
         
         print(f"✅ {bill_type.upper()} complete: {stats['processed']} processed")
+        
+        # Note: No need to reset_stats() since we create fresh ingester each time
     
     print("\n" + "=" * 60)
     print("✅ All Bill Types Complete!")
