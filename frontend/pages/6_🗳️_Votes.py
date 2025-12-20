@@ -143,7 +143,7 @@ def main():
     
     if stats["total"] == 0:
         st.warning("⚠️ No votes in database yet.")
-        st.info("Run the sync script: `uv run python scripts/sync_votes.py --chamber house --max 100`")
+        st.info("Run the sync script: `uv run python scripts/pipelines/sync_votes.py --chamber house --max 100`")
         return
     
     # Sidebar stats

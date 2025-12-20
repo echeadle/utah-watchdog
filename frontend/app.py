@@ -182,12 +182,12 @@ def main():
             members = get_utah_delegation()
         except Exception as e:
             st.error(f"Error loading data: {e}")
-            st.info("💡 Make sure you've run: `uv run python scripts/sync_members.py`")
+            st.info("💡 Make sure you've run: `uv run python scripts/pipelines/sync_members.py`")
             return
     
     if not members:
         st.warning("⚠️ No members found in database.")
-        st.info("Run the sync script to populate data: `uv run python scripts/sync_members.py`")
+        st.info("Run the sync script to populate data: `uv run python scripts/pipelines/sync_members.py`")
         return
     
     # Separate by chamber
@@ -252,7 +252,7 @@ with st.sidebar:
     st.markdown("Data syncs automatically daily at 5 AM UTC")
     
     if st.button("📖 How to Manual Sync"):
-        st.code("uv run python scripts/sync_members.py", language="bash")
+        st.code("uv run python scripts/pipelines/sync_members.py", language="bash")
     
     st.divider()
     

@@ -201,7 +201,7 @@ def main():
     
     if stats["total"] == 0:
         st.warning("⚠️ No bills in database yet.")
-        st.info("Run the sync script: `uv run python scripts/sync_bills.py --max 100`")
+        st.info("Run the sync script: `uv run python scripts/pipelines/sync_bills.py --max 100`")
         return
     
     # Show stats in sidebar

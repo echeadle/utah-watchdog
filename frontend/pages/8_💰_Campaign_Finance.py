@@ -467,12 +467,12 @@ def main():
         
         1. Make sure politicians have FEC IDs:
            ```bash
-           uv run python scripts/populate_fec_ids.py
+           uv run python scripts/maintenance/populate_fec_ids.py
            ```
         
         2. Sync contributions:
            ```bash
-           uv run python scripts/sync_fec_contributions.py --cycle 2024
+           uv run python scripts/pipelines/sync_fec_contributions.py --cycle 2024
            ```
         """)
         return

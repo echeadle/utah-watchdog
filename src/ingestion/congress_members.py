@@ -3,10 +3,12 @@ Ingester for current members of Congress from Congress.gov API.
 
 This keeps the politician database up-to-date with who's currently serving.
 Handles transitions like retirements, special elections, and new terms.
+
+ENHANCED: Now supports native filtering by state and chamber to minimize API calls.
 """
 import asyncio
 import httpx
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 from datetime import date, datetime
 import logging
 
@@ -25,30 +27,64 @@ class CongressMembersIngester(BaseIngester[Politician]):
     
     Uses the /member/congress/{congress}/{state} endpoint with 
     currentMember=true to get only active legislators.
+    
+    Supports filtering by state and chamber to minimize API calls.
     """
     
-    def __init__(self, congress: int = 118):
+    def __init__(
+        self, 
+        congress: int = 118,
+        state_filter: Optional[str] = None,
+        chamber_filter: Optional[str] = None
+    ):
         """
         Initialize the ingester.
         
         Args:
             congress: Congress number (e.g., 118 for 118th Congress, 2023-2025)
+            state_filter: Optional 2-letter state code to fetch (e.g., "UT")
+                         If None, fetches all states
+            chamber_filter: Optional chamber filter ("senate" or "house")
+                           Applied during fetch, not just during transform
         """
         super().__init__()
         self.congress = congress
+        self.state_filter = state_filter.upper() if state_filter else None
+        self.chamber_filter = chamber_filter.lower() if chamber_filter else None
         self.api_key = settings.CONGRESS_GOV_API_KEY
         self.base_url = CONGRESS_GOV_BASE_URL
         
+        # Log filter configuration
+        if self.state_filter:
+            self.logger.info(f"State filter: {self.state_filter}")
+        if self.chamber_filter:
+            self.logger.info(f"Chamber filter: {self.chamber_filter}")
+        
     async def fetch_data(self, **kwargs) -> AsyncGenerator[dict, None]:
         """
-        Fetch current members from all states.
+        Fetch current members, optionally filtered by state.
+        
+        If state_filter is set, only fetches that state.
+        Otherwise, fetches all states.
+        
+        Chamber filtering is applied during iteration to skip unwanted members.
         
         Yields:
             Raw member data from Congress.gov API
         """
         async with httpx.AsyncClient(timeout=30.0) as client:
+            # Determine which states to fetch
+            if self.state_filter:
+                # Only fetch the specified state
+                states_to_fetch = [self.state_filter]
+                self.logger.info(f"Fetching only {self.state_filter} (state filter active)")
+            else:
+                # Fetch all states
+                states_to_fetch = US_STATES
+                self.logger.info(f"Fetching all {len(US_STATES)} states")
+            
             # Fetch for each state
-            for state_code in US_STATES:
+            for state_code in states_to_fetch:
                 try:
                     url = f"{self.base_url}/member/congress/{self.congress}/{state_code}"
                     params = {
@@ -72,10 +108,25 @@ class CongressMembersIngester(BaseIngester[Politician]):
                     members = data.get("members", [])
                     self.logger.info(f"Found {len(members)} members for {state_code}")
                     
+                    # Apply chamber filter if set
+                    filtered_count = 0
                     for member in members:
                         # Add state code to the member data
                         member["state_code"] = state_code
+                        
+                        # Apply chamber filter if specified
+                        if self.chamber_filter:
+                            member_chamber = self._extract_chamber(member)
+                            if member_chamber != self.chamber_filter:
+                                continue  # Skip this member
+                        
+                        filtered_count += 1
                         yield member
+                    
+                    if self.chamber_filter:
+                        self.logger.info(
+                            f"After chamber filter: {filtered_count}/{len(members)} members"
+                        )
                     
                     # Respect rate limits (5000/hour = ~1.4/second)
                     await asyncio.sleep(0.2)
@@ -86,6 +137,26 @@ class CongressMembersIngester(BaseIngester[Politician]):
                 except Exception as e:
                     self.logger.error(f"Error fetching {state_code}: {e}")
                     self.stats["errors"] += 1
+    
+    def _extract_chamber(self, member: dict) -> Optional[str]:
+        """
+        Extract chamber from member data.
+        
+        Args:
+            member: Raw member data from API
+            
+        Returns:
+            "senate" or "house" or None if unknown
+        """
+        terms = member.get("terms", {}).get("item", [])
+        if terms:
+            current_term = terms[0]  # Most recent term
+            chamber_str = current_term.get("chamber", "").lower()
+            if "senate" in chamber_str:
+                return "senate"
+            elif "house" in chamber_str:
+                return "house"
+        return None
                     
     
     async def transform(self, raw: dict) -> Politician:
@@ -228,10 +299,26 @@ class CongressMembersIngester(BaseIngester[Politician]):
         """
         Run a complete sync of all current members.
         
+        Respects state_filter and chamber_filter if set during initialization.
+        
         Returns:
             Statistics about the sync operation
         """
-        self.logger.info(f"Starting full sync of Congress {self.congress} members...")
+        if self.state_filter or self.chamber_filter:
+            filters = []
+            if self.state_filter:
+                filters.append(f"state={self.state_filter}")
+            if self.chamber_filter:
+                filters.append(f"chamber={self.chamber_filter}")
+            self.logger.info(
+                f"Starting filtered sync of Congress {self.congress} members "
+                f"({', '.join(filters)})"
+            )
+        else:
+            self.logger.info(
+                f"Starting full sync of Congress {self.congress} members..."
+            )
+        
         stats = await self.run()
         
         self.logger.info("Sync complete!")
@@ -242,7 +329,12 @@ async def main():
     """CLI entry point for testing"""
     logging.basicConfig(level=logging.INFO)
     
-    ingester = CongressMembersIngester(congress=118)
+    # Example: Sync only Utah senators
+    ingester = CongressMembersIngester(
+        congress=118,
+        state_filter="UT",
+        chamber_filter="senate"
+    )
     stats = await ingester.run_full_sync()
     
     print("\n=== Sync Complete ===")

@@ -3,6 +3,7 @@ Politician Detail Page - full profile for a single legislator.
 """
 import streamlit as st
 from pymongo import MongoClient
+from datetime import datetime
 
 from src.config.settings import settings
 
@@ -161,7 +162,7 @@ def main():
         
         if not committees:
             st.info("No committee assignments found")
-            st.caption("Run: `uv run python scripts/sync_committees.py`")
+            st.caption("Run: `uv run python scripts/pipelines/sync_committees.py`")
         else:
             st.write(f"**{len(committees)} committee assignments**")
             
@@ -187,7 +188,7 @@ def main():
         
         if not politician_votes:
             st.info("No voting records found in database")
-            st.caption("Run: `uv run python scripts/sync_votes.py --chamber house --congress 118 --max 100`")
+            st.caption("Run: `uv run python scripts/pipelines/sync_votes.py --chamber house --congress 118 --max 100`")
         else:
             st.write(f"**{len(politician_votes)} most recent votes**")
             
