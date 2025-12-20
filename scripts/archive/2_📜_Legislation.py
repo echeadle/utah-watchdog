@@ -36,16 +36,7 @@ def get_db():
 # Data Fetching
 # ============================================================================
 
-def get_recent_bills(
-    limit: int = 50, 
-    status: str = None, 
-    sponsor_id: str = None,
-    congress: int = None,
-    sort_by: str = "introduced_date",
-    sort_order: int = -1,
-    bill_number: str = None,
-    bill_type: str = None
-):
+def get_recent_bills(limit: int = 50, status: str = None, sponsor_id: str = None):
     """Get recent bills with optional filters"""
     db = get_db()
     
@@ -58,22 +49,8 @@ def get_recent_bills(
     if sponsor_id:
         filter_dict["sponsor_bioguide_id"] = sponsor_id
     
-    if congress and congress != "All":
-        filter_dict["congress"] = int(congress)
-    
-    # Bill number search
-    if bill_number:
-        # Extract just the number (remove letters, spaces, periods)
-        import re
-        number_only = re.sub(r'[^\d]', '', bill_number)
-        if number_only:
-            filter_dict["number"] = int(number_only)
-    
-    if bill_type and bill_type != "All":
-        filter_dict["bill_type"] = bill_type.lower()
-    
     bills = list(db.legislation.find(filter_dict)
-                 .sort(sort_by, sort_order)
+                 .sort("introduced_date", -1)
                  .limit(limit))
     
     return bills
@@ -105,48 +82,15 @@ def get_bill_stats():
     
     total = db.legislation.count_documents({})
     by_status = {}
-    by_congress = {}
     
-    # Count by status
     for status in ["introduced", "in_committee", "passed_house", "passed_senate", "became_law"]:
         count = db.legislation.count_documents({"status": status})
         if count > 0:
             by_status[status] = count
     
-    # Count by congress
-    pipeline = [
-        {"$group": {"_id": "$congress", "count": {"$sum": 1}}},
-        {"$sort": {"_id": -1}}
-    ]
-    congress_counts = list(db.legislation.aggregate(pipeline))
-    for item in congress_counts:
-        if item["_id"]:  # Skip None values
-            by_congress[item["_id"]] = item["count"]
-    
     return {
         "total": total,
-        "by_status": by_status,
-        "by_congress": by_congress
-    }
-
-
-def check_policy_area_data():
-    """Check if policy_area field has actual data"""
-    db = get_db()
-    
-    # Count bills with policy_area
-    with_policy = db.legislation.count_documents({
-        "policy_area": {"$exists": True, "$ne": None}
-    })
-    
-    # Get a sample
-    sample = db.legislation.find_one({
-        "policy_area": {"$exists": True, "$ne": None}
-    })
-    
-    return {
-        "count": with_policy,
-        "sample": sample.get("policy_area") if sample else None
+        "by_status": by_status
     }
 
 
@@ -215,13 +159,7 @@ def display_bill_card(bill: dict, show_sponsor: bool = True):
             
             with detail_col1:
                 st.write("**Bill ID:**", bill.get("bill_id", "N/A"))
-                
-                # Policy Area - always show, even if None
-                policy_area = bill.get("policy_area")
-                if policy_area and policy_area != "None" and policy_area:
-                    st.write("**Policy Area:**", policy_area)
-                else:
-                    st.write("**Policy Area:**", "Not specified")
+                st.write("**Policy Area:**", bill.get("policy_area", "Not specified"))
                 
                 # Subjects
                 subjects = bill.get("subjects", [])
@@ -266,31 +204,16 @@ def main():
         st.info("Run the sync script: `uv run python scripts/pipelines/sync_bills.py --max 100`")
         return
     
-    # Check policy area data
-    policy_check = check_policy_area_data()
-    
     # Show stats in sidebar
     with st.sidebar:
         st.markdown("## 📊 Statistics")
         st.metric("Total Bills", stats["total"])
-        
-        if stats["by_congress"]:
-            st.markdown("### By Congress")
-            for congress_num, count in sorted(stats["by_congress"].items(), reverse=True):
-                st.metric(f"{congress_num}th Congress", count)
         
         if stats["by_status"]:
             st.markdown("### By Status")
             for status, count in stats["by_status"].items():
                 status_display = status.replace("_", " ").title()
                 st.metric(status_display, count)
-        
-        # Policy area status
-        st.markdown("### Data Quality")
-        if policy_check["count"] > 0:
-            st.caption(f"✅ {policy_check['count']} bills have policy areas")
-        else:
-            st.caption("⚠️ No policy area data available")
     
     # ========================================================================
     # Filters
@@ -298,58 +221,16 @@ def main():
     
     st.subheader("Filters")
     
-    # Bill Number Search (prominent at top)
-    st.markdown("#### 🔍 Search by Bill Number")
-    search_col1, search_col2, search_col3 = st.columns([2, 2, 1])
-    
-    with search_col1:
-        bill_number_search = st.text_input(
-            "Bill Number",
-            placeholder="e.g., 6849 or HR 6849",
-            help="Enter just the number (e.g., 6849) or include type (HR 6849, S 1234)"
-        )
-    
-    with search_col2:
-        # Bill type for search
-        bill_type_search = st.selectbox(
-            "Bill Type",
-            ["All", "HR (House Bill)", "S (Senate Bill)", "HRES (House Resolution)", 
-             "SRES (Senate Resolution)", "HJRES (House Joint Resolution)", "SJRES (Senate Joint Resolution)"],
-            help="Narrow search by bill type"
-        )
-        
-        # Extract just the code
-        bill_type_code = None
-        if bill_type_search != "All":
-            bill_type_code = bill_type_search.split()[0].lower()  # Gets "hr", "s", etc.
-    
-    with search_col3:
-        if bill_number_search:
-            st.info(f"🔍 Searching for bill #{bill_number_search}")
-    
-    st.divider()
-    
-    # Other filters
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Congress filter
-        congress_options = ["All"] + [str(c) for c in sorted(stats["by_congress"].keys(), reverse=True)]
-        congress_filter = st.selectbox(
-            "Congress",
-            congress_options,
-            index=0,
-            help="Filter by Congress session"
-        )
-    
-    with col2:
         status_filter = st.selectbox(
             "Status",
             ["All", "Introduced", "In Committee", "Passed House", "Passed Senate", "Became Law"],
             index=0
         )
     
-    with col3:
+    with col2:
         # Get list of sponsors for filter
         db = get_db()
         utah_sponsors = list(db.politicians.find(
@@ -360,32 +241,8 @@ def main():
         sponsor_options = ["All Sponsors"] + [f"{s['full_name']} ({s['bioguide_id']})" for s in utah_sponsors]
         sponsor_filter = st.selectbox("Utah Sponsor", sponsor_options, index=0)
     
-    with col4:
+    with col3:
         limit = st.number_input("Number of bills", min_value=10, max_value=500, value=50, step=10)
-    
-    # Sort options
-    st.markdown("#### Sort By")
-    sort_col1, sort_col2 = st.columns(2)
-    
-    with sort_col1:
-        sort_by = st.selectbox(
-            "Sort field",
-            [
-                ("Introduced Date", "introduced_date"),
-                ("Bill Number", "number"),
-                ("Last Updated", "last_updated")
-            ],
-            format_func=lambda x: x[0],
-            index=0
-        )
-    
-    with sort_col2:
-        sort_order = st.selectbox(
-            "Sort order",
-            [("Newest First", -1), ("Oldest First", 1)],
-            format_func=lambda x: x[0],
-            index=0
-        )
     
     # Parse sponsor filter
     sponsor_id = None
@@ -404,36 +261,14 @@ def main():
         bills = get_recent_bills(
             limit=limit,
             status=status_filter if status_filter != "All" else None,
-            sponsor_id=sponsor_id,
-            congress=congress_filter if congress_filter != "All" else None,
-            sort_by=sort_by[1],  # Get the field name from tuple
-            sort_order=sort_order[1],  # Get the order from tuple
-            bill_number=bill_number_search if bill_number_search else None,
-            bill_type=bill_type_code
+            sponsor_id=sponsor_id
         )
     
     if not bills:
         st.info("No bills match your filters.")
         return
     
-    # Show active filters
-    active_filters = []
-    if bill_number_search:
-        search_desc = f"Bill #{bill_number_search}"
-        if bill_type_code:
-            search_desc += f" ({bill_type_code.upper()})"
-        active_filters.append(search_desc)
-    if congress_filter != "All":
-        active_filters.append(f"Congress {congress_filter}")
-    if status_filter != "All":
-        active_filters.append(f"Status: {status_filter}")
-    if sponsor_filter != "All Sponsors":
-        active_filters.append(f"Sponsor: {sponsor_filter.split('(')[0].strip()}")
-    
-    if active_filters:
-        st.caption(f"🔍 Active filters: {' | '.join(active_filters)}")
-    
-    st.subheader(f"Bills ({len(bills)} shown)")
+    st.subheader(f"Recent Bills ({len(bills)} shown)")
     
     # Display bills
     for bill in bills:

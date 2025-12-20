@@ -171,12 +171,9 @@ class CongressBillsIngester(BaseIngester[Bill]):
         
         # Get subjects
         subjects_data = raw.get("subjects", {})
+        policy_area = subjects_data.get("legislativeSubjects", [{}])[0].get("name") if subjects_data.get("legislativeSubjects") else None
         subjects = [s.get("name") for s in subjects_data.get("legislativeSubjects", []) if s.get("name")]
-
-        # Get policy area (separate field!)
-        policy_area_obj = raw.get("policyArea")
-        policy_area = policy_area_obj.get("name") if policy_area_obj else None
-                
+        
         # Get summary
         summaries = raw.get("summaries", {})
         summary = None
