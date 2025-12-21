@@ -8,11 +8,15 @@ politicians, legislation, voting records, and campaign finance.
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
 from pydantic_ai import Agent, RunContext
 from typing import List, Optional
 
 from src.agents.dependencies import AgentDependencies
 from src.agents.prompts import RESEARCH_AGENT_PROMPT
+
+# Get model name from environment variable
+model_name = os.getenv('MODEL_NAME', 'claude-sonnet-4-5-20250929')  # Default to Claude if not set
 
 # Import tool functions - Politicians
 from src.agents.tools.politician import (
@@ -39,7 +43,7 @@ from src.agents.tools.finance import (
 
 # Create the agent
 research_agent = Agent(
-    'openai:gpt-4o',
+    model=model_name,
     deps_type=AgentDependencies,
     system_prompt=RESEARCH_AGENT_PROMPT,
 )
@@ -423,5 +427,9 @@ async def run_research_query(query: str, deps: AgentDependencies) -> str:
         deps = await get_agent_deps()
         response = await run_research_query("What bills has Mike Lee sponsored?", deps)
     """
-    result = await research_agent.run(query, deps=deps)
+    result = await research_agent.run(
+        query,
+        deps=deps
+    )
     return result.output
+    

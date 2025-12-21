@@ -5,8 +5,17 @@ This version passes bioguide_id to the ingester so contributions can be
 properly linked to politicians.
 
 Usage:
+    # Sync specific politician by bioguide ID
+    uv run python scripts/pipelines/sync_fec_contributions.py --bioguide L000577 --cycle 2024
+    
+    # Sync multiple politicians
+    uv run python scripts/pipelines/sync_fec_contributions.py --bioguide L000577,R000615 --cycle 2024
+    
+    # Sync all Utah politicians
+    uv run python scripts/pipelines/sync_fec_contributions.py --state UT --cycle 2024
+    
     # Delete old contributions without bioguide_id and re-sync
-    uv run python scripts/sync_fec_contributions_FIXED.py --cycle 2024 --limit 3
+    uv run python scripts/pipelines/sync_fec_contributions.py --cycle 2024 --limit 3
 """
 import asyncio
 import sys
@@ -20,7 +29,11 @@ from src.ingestion.fec import FECIngester
 from src.config.settings import settings
 
 
-async def get_politicians_with_fec_ids(limit: int = None):
+async def get_politicians_with_fec_ids(
+    limit: int = None,
+    bioguide_ids: list[str] = None,
+    state: str = None
+):
     """Get politicians that have FEC candidate IDs"""
     
     client = AsyncIOMotorClient(settings.MONGODB_URI)
@@ -30,6 +43,14 @@ async def get_politicians_with_fec_ids(limit: int = None):
         "fec_candidate_id": {"$exists": True, "$ne": None},
         "bioguide_id": {"$exists": True, "$ne": None}
     }
+    
+    # Filter by specific bioguide IDs
+    if bioguide_ids:
+        query["bioguide_id"] = {"$in": bioguide_ids}
+    
+    # Filter by state
+    if state:
+        query["state"] = state.upper()
     
     cursor = db.politicians.find(query)
     if limit:
@@ -100,7 +121,9 @@ async def sync_all_contributions(
     limit: int = None,
     max_pages: int = None,
     dry_run: bool = False,
-    clean_first: bool = False
+    clean_first: bool = False,
+    bioguide_ids: list[str] = None,
+    state: str = None
 ):
     """
     Sync contributions for all politicians with FEC IDs.
@@ -111,6 +134,8 @@ async def sync_all_contributions(
         max_pages: Max pages per politician (None = all available)
         dry_run: If True, don't actually save data
         clean_first: If True, delete old contributions without bioguide_id
+        bioguide_ids: Filter to specific bioguide IDs
+        state: Filter to specific state
     """
     print("=" * 60)
     print("💰 FEC CAMPAIGN CONTRIBUTIONS SYNC (FIXED)")
@@ -133,9 +158,24 @@ async def sync_all_contributions(
     
     # Get politicians with FEC IDs
     print(f"\n🔍 Finding politicians with FEC IDs...")
-    politicians = await get_politicians_with_fec_ids(limit=limit)
+    politicians = await get_politicians_with_fec_ids(
+        limit=limit,
+        bioguide_ids=bioguide_ids,
+        state=state
+    )
     
     print(f"✅ Found {len(politicians)} politicians with FEC IDs")
+    
+    if not politicians:
+        print("\n❌ No politicians found matching criteria")
+        print("\nPossible issues:")
+        if bioguide_ids:
+            print(f"  - Bioguide ID(s) not found: {', '.join(bioguide_ids)}")
+        if state:
+            print(f"  - No politicians from {state} with FEC IDs")
+        print("  - Politicians may not have FEC candidate IDs")
+        print("\n💡 Tip: Run populate_fec_ids.py first to set FEC IDs")
+        return
     
     if dry_run:
         print("\n⚠️  DRY RUN MODE - No data will be saved")
@@ -205,6 +245,16 @@ async def main():
         help="Election cycle to sync (can specify multiple times)"
     )
     parser.add_argument(
+        "--bioguide",
+        type=str,
+        help="Bioguide ID(s) to sync (comma-separated). E.g., L000577 or L000577,R000615"
+    )
+    parser.add_argument(
+        "--state",
+        type=str,
+        help="State code to filter politicians (e.g., UT, CA)"
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         help="Limit number of politicians to process (for testing)"
@@ -242,13 +292,24 @@ async def main():
     # Default to 2024 if no cycles specified
     cycles = args.cycle if args.cycle else [2024]
     
+    # Parse bioguide IDs if provided
+    bioguide_ids = None
+    if args.bioguide:
+        bioguide_ids = [b.strip() for b in args.bioguide.split(",")]
+        print(f"🎯 Filtering to bioguide IDs: {', '.join(bioguide_ids)}")
+    
+    if args.state:
+        print(f"🎯 Filtering to state: {args.state}")
+    
     try:
         await sync_all_contributions(
             cycles=cycles,
             limit=args.limit,
             max_pages=args.max_pages,
             dry_run=args.dry_run,
-            clean_first=args.clean_first
+            clean_first=args.clean_first,
+            bioguide_ids=bioguide_ids,
+            state=args.state
         )
         
     except KeyboardInterrupt:
