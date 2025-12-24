@@ -167,7 +167,7 @@ class CongressMembersIngester(BaseIngester[Politician]):
         """
         terms = member.get("terms", {}).get("item", [])
         if terms:
-            current_term = terms[0]  # Most recent term
+            current_term = terms[-1]  # Get LAST term (most recent)
             chamber_str = current_term.get("chamber", "").lower()
             if "senate" in chamber_str:
                 return "senate"
@@ -218,9 +218,9 @@ class CongressMembersIngester(BaseIngester[Politician]):
         Returns:
             Politician model instance
         """
-        # Determine chamber
+        # Determine chamber - use MOST RECENT term (last in array)
         terms = raw.get("terms", {}).get("item", [])
-        current_term = terms[0] if terms else {}
+        current_term = terms[-1] if terms else {}  # -1 gets last/most recent term
 
         chamber_str = current_term.get("chamber", "").lower()
         if chamber_str == "senate":
@@ -337,18 +337,11 @@ class CongressMembersIngester(BaseIngester[Politician]):
         """
         collection = self.db.politicians
         
-        # First, check if this is a new member for this seat
-        # If so, mark the old occupant as no longer in office
-        if politician.chamber == Chamber.SENATE:
-            # For Senate, match by state and chamber
-            query = {
-                "state": politician.state,
-                "chamber": "senate",
-                "in_office": True,
-                "bioguide_id": {"$ne": politician.bioguide_id}  # Different person
-            }
-        else:
-            # For House, match by state and district
+        # Mark old occupant as out of office (House only)
+        # Note: We only do this for House because each district has exactly 1 rep.
+        # For Senate, states have 2 senators (different classes), so we can't
+        # automatically determine which seat without Senate class info.
+        if politician.chamber == Chamber.HOUSE:
             query = {
                 "state": politician.state,
                 "district": politician.district,
@@ -356,18 +349,17 @@ class CongressMembersIngester(BaseIngester[Politician]):
                 "in_office": True,
                 "bioguide_id": {"$ne": politician.bioguide_id}
             }
-        
-        # Mark old occupant as out of office
-        update_result = await collection.update_many(
-            query,
-            {"$set": {"in_office": False, "last_updated": datetime.utcnow()}}
-        )
-        
-        if update_result.modified_count > 0:
-            self.logger.info(
-                f"Marked {update_result.modified_count} old record(s) as out of office "
-                f"for {politician.full_name}'s seat"
+
+            update_result = await collection.update_many(
+                query,
+                {"$set": {"in_office": False, "last_updated": datetime.utcnow()}}
             )
+
+            if update_result.modified_count > 0:
+                self.logger.info(
+                    f"Marked {update_result.modified_count} old record(s) as out of office "
+                    f"for {politician.full_name}'s seat"
+                )
         
         # Convert Pydantic model to dict
         politician_data = politician.model_dump()
