@@ -14,6 +14,8 @@ venv/
 .env
 .env.local
 
+# Data files (can be regenerated from API)
+scripts/data/*.csv
 
 # UV
 .python-version

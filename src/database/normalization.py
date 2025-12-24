@@ -34,7 +34,9 @@ STATE_NAME_TO_CODE = {
     "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
     "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
     "Wisconsin": "WI", "Wyoming": "WY",
-    "District of Columbia": "DC", "Puerto Rico": "PR"
+    "District of Columbia": "DC", "Puerto Rico": "PR",
+    "American Samoa": "AS", "Guam": "GU",
+    "Northern Mariana Islands": "MP", "U.S. Virgin Islands": "VI"
 }
 
 # Reverse mapping for validation
