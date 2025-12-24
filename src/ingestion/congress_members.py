@@ -32,33 +32,39 @@ class CongressMembersIngester(BaseIngester[Politician]):
     """
     
     def __init__(
-        self, 
+        self,
         congress: int = 118,
         state_filter: Optional[str] = None,
-        chamber_filter: Optional[str] = None
+        chamber_filter: Optional[str] = None,
+        fetch_details: bool = True
     ):
         """
         Initialize the ingester.
-        
+
         Args:
             congress: Congress number (e.g., 118 for 118th Congress, 2023-2025)
             state_filter: Optional 2-letter state code to fetch (e.g., "UT")
                          If None, fetches all states
             chamber_filter: Optional chamber filter ("senate" or "house")
                            Applied during fetch, not just during transform
+            fetch_details: If True, fetch detailed member data including contact info
+                          (slower but more complete)
         """
         super().__init__()
         self.congress = congress
         self.state_filter = state_filter.upper() if state_filter else None
         self.chamber_filter = chamber_filter.lower() if chamber_filter else None
+        self.fetch_details = fetch_details
         self.api_key = settings.CONGRESS_GOV_API_KEY
         self.base_url = CONGRESS_GOV_BASE_URL
-        
+
         # Log filter configuration
         if self.state_filter:
             self.logger.info(f"State filter: {self.state_filter}")
         if self.chamber_filter:
             self.logger.info(f"Chamber filter: {self.chamber_filter}")
+        if self.fetch_details:
+            self.logger.info("Detailed member fetching enabled (includes contact info)")
         
     async def fetch_data(self, **kwargs) -> AsyncGenerator[dict, None]:
         """
@@ -113,13 +119,24 @@ class CongressMembersIngester(BaseIngester[Politician]):
                     for member in members:
                         # Add state code to the member data
                         member["state_code"] = state_code
-                        
+
                         # Apply chamber filter if specified
                         if self.chamber_filter:
                             member_chamber = self._extract_chamber(member)
                             if member_chamber != self.chamber_filter:
                                 continue  # Skip this member
-                        
+
+                        # Fetch detailed data if requested
+                        if self.fetch_details:
+                            bioguide_id = member.get("bioguideId")
+                            if bioguide_id:
+                                details = await self.fetch_member_details(bioguide_id, client)
+                                if details:
+                                    # Merge details into member data
+                                    member["_details"] = details
+                                # Small delay to respect rate limits
+                                await asyncio.sleep(0.2)
+
                         filtered_count += 1
                         yield member
                     
@@ -141,10 +158,10 @@ class CongressMembersIngester(BaseIngester[Politician]):
     def _extract_chamber(self, member: dict) -> Optional[str]:
         """
         Extract chamber from member data.
-        
+
         Args:
             member: Raw member data from API
-            
+
         Returns:
             "senate" or "house" or None if unknown
         """
@@ -157,22 +174,54 @@ class CongressMembersIngester(BaseIngester[Politician]):
             elif "house" in chamber_str:
                 return "house"
         return None
+
+    async def fetch_member_details(self, bioguide_id: str, client: httpx.AsyncClient) -> Optional[dict]:
+        """
+        Fetch detailed member information including contact info.
+
+        Args:
+            bioguide_id: The member's bioguide ID
+            client: HTTP client to use
+
+        Returns:
+            Detailed member data or None if fetch fails
+        """
+        try:
+            url = f"{self.base_url}/member/{bioguide_id}"
+            params = {
+                "api_key": self.api_key,
+                "format": "json"
+            }
+
+            self.logger.debug(f"Fetching details for {bioguide_id}...")
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            return data.get("member", {})
+
+        except httpx.HTTPError as e:
+            self.logger.error(f"Error fetching details for {bioguide_id}: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Unexpected error fetching details for {bioguide_id}: {e}")
+            return None
                     
     
     async def transform(self, raw: dict) -> Politician:
         """
         Transform Congress.gov member data to our Politician model.
-        
+
         Args:
             raw: Raw member data from API
-            
+
         Returns:
             Politician model instance
         """
         # Determine chamber
         terms = raw.get("terms", {}).get("item", [])
         current_term = terms[0] if terms else {}
-        
+
         chamber_str = current_term.get("chamber", "").lower()
         if chamber_str == "senate":
             chamber = Chamber.SENATE
@@ -181,7 +230,7 @@ class CongressMembersIngester(BaseIngester[Politician]):
             chamber = Chamber.HOUSE
             district_num = raw.get("district")
             district = int(district_num) if district_num else None
-        
+
         # Map party
         party_name = raw.get("partyName", "")
         if "Republican" in party_name:
@@ -192,7 +241,7 @@ class CongressMembersIngester(BaseIngester[Politician]):
             party = Party.INDEPENDENT
         else:
             party = Party.OTHER
-        
+
         # Parse name - API returns "Last, First" or "Last, First Middle"
         full_name_raw = raw.get("name", "")
         if ", " in full_name_raw:
@@ -206,18 +255,57 @@ class CongressMembersIngester(BaseIngester[Politician]):
             name_parts = full_name_raw.split()
             first_name = name_parts[0] if name_parts else ""
             last_name = name_parts[-1] if len(name_parts) > 1 else ""
-        
+
         # Get bioguide ID (our primary key)
         bioguide_id = raw.get("bioguideId")
         if not bioguide_id:
             raise ValueError(f"Missing bioguideId for {full_name}")
-        
+
         # Title
         if chamber == Chamber.SENATE:
             title = "Senator"
         else:
             title = "Representative"
-        
+
+        # Extract contact information from detailed data if available
+        office = None
+        phone = None
+        details = raw.get("_details", {})
+        if details:
+            # Extract address information (typically DC office)
+            address_info = details.get("addressInformation", {})
+            if address_info:
+                # Get office addresses - usually an array of offices
+                offices = address_info.get("officeAddress") or address_info.get("offices", [])
+                if isinstance(offices, list) and offices:
+                    # Prefer DC office (first one is usually DC)
+                    dc_office = offices[0]
+                    if isinstance(dc_office, dict):
+                        # Build office address string
+                        office_parts = []
+                        if dc_office.get("line1"):
+                            office_parts.append(dc_office["line1"])
+                        if dc_office.get("line2"):
+                            office_parts.append(dc_office["line2"])
+                        if dc_office.get("city"):
+                            city_state_zip = dc_office["city"]
+                            if dc_office.get("state"):
+                                city_state_zip += f", {dc_office['state']}"
+                            if dc_office.get("zip"):
+                                city_state_zip += f" {dc_office['zip']}"
+                            office_parts.append(city_state_zip)
+                        office = ", ".join(office_parts) if office_parts else None
+
+                        # Extract phone
+                        phone = dc_office.get("phoneNumber") or dc_office.get("phone")
+                elif isinstance(offices, str):
+                    # Sometimes it's just a string
+                    office = offices
+
+                # Alternative: try phoneNumber at root level
+                if not phone:
+                    phone = address_info.get("phoneNumber")
+
         return Politician(
             bioguide_id=bioguide_id,
             first_name=first_name,
@@ -230,6 +318,8 @@ class CongressMembersIngester(BaseIngester[Politician]):
             title=title,
             in_office=True,
             website=raw.get("officialWebsiteUrl"),
+            office=office,
+            phone=phone,
             last_updated=datetime.utcnow()
         )
         
