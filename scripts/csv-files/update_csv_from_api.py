@@ -20,8 +20,10 @@ from typing import List
 
 from src.ingestion.congress_members import CongressMembersIngester
 from src.ingestion.congress_bills import CongressBillsIngester
+from src.ingestion.fec import FECIngester
 from src.models.politician import Politician
 from src.models.legislation import Bill
+from src.models.finance import Contribution
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,6 +38,7 @@ class CSVExporter:
     def __init__(self):
         self.politicians: List[Politician] = []
         self.bills: List[Bill] = []
+        self.contributions: List[Contribution] = []
 
     async def fetch_politicians(self, congress: int = 119, state_filter: str = None):
         """
@@ -174,21 +177,141 @@ class CSVExporter:
 
         logger.info(f"Saved {len(self.bills)} bills to {output_file}")
 
+    async def fetch_contributions(self, state_filter: str = None, cycle: int = 2024, max_per_politician: int = 100):
+        """
+        Fetch campaign contributions from FEC API.
+
+        Args:
+            state_filter: Optional state filter (e.g., "UT")
+            cycle: Election cycle (default: 2024)
+            max_per_politician: Max contributions per politician (default: 100)
+        """
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from src.config.settings import settings
+
+        logger.info(f"Fetching contributions for cycle {cycle}...")
+
+        # Connect to DB to get politicians with FEC IDs
+        client = AsyncIOMotorClient(settings.MONGODB_URI)
+        db = client[settings.MONGODB_DATABASE]
+
+        query = {
+            "fec_candidate_id": {"$exists": True, "$ne": None},
+            "bioguide_id": {"$exists": True, "$ne": None}
+        }
+
+        if state_filter:
+            query["state"] = state_filter.upper()
+
+        politicians = await db.politicians.find(query).to_list(None)
+        client.close()
+
+        logger.info(f"Found {len(politicians)} politicians with FEC IDs")
+
+        if not politicians:
+            logger.warning("No politicians with FEC IDs found")
+            return
+
+        # Fetch contributions for each politician
+        for politician in politicians:
+            name = politician.get("full_name")
+            fec_id = politician.get("fec_candidate_id")
+            bioguide_id = politician.get("bioguide_id")
+
+            logger.info(f"Fetching contributions for {name} ({bioguide_id})...")
+
+            ingester = FECIngester(
+                candidate_name=name,
+                bioguide_id=bioguide_id
+            )
+
+            try:
+                count = 0
+                async for raw_data in ingester.fetch_data(
+                    candidate_id=fec_id,
+                    cycle=cycle,
+                    per_page=100,
+                    max_pages=1  # Limit to 100 contributions per politician
+                ):
+                    try:
+                        contribution = await ingester.transform(raw_data)
+                        self.contributions.append(contribution)
+                        count += 1
+
+                        if count >= max_per_politician:
+                            break
+
+                    except Exception as e:
+                        logger.error(f"Error transforming contribution: {e}")
+
+                logger.info(f"  Fetched {count} contributions for {name}")
+
+            except Exception as e:
+                logger.error(f"Error fetching contributions for {name}: {e}")
+
+        logger.info(f"Total contributions fetched: {len(self.contributions)}")
+
+    def save_contributions_csv(self):
+        """Save contributions to CSV file."""
+        if not self.contributions:
+            logger.warning("No contributions to save")
+            return
+
+        output_file = DATA_DIR / "contributions.csv"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Define CSV columns
+        fieldnames = [
+            'id', 'bioguide_id', 'recipient_name', 'contributor_name',
+            'contributor_type', 'contributor_employer', 'contributor_occupation',
+            'contributor_city', 'contributor_state', 'contributor_zip',
+            'amount', 'contribution_date', 'cycle', 'source', 'last_updated'
+        ]
+
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+            for contrib in self.contributions:
+                row = {
+                    'id': contrib.id,
+                    'bioguide_id': contrib.bioguide_id or '',
+                    'recipient_name': contrib.recipient_name,
+                    'contributor_name': contrib.contributor_name,
+                    'contributor_type': contrib.contributor_type.value,
+                    'contributor_employer': contrib.contributor_employer or '',
+                    'contributor_occupation': contrib.contributor_occupation or '',
+                    'contributor_city': contrib.contributor_city or '',
+                    'contributor_state': contrib.contributor_state or '',
+                    'contributor_zip': contrib.contributor_zip or '',
+                    'amount': str(contrib.amount),
+                    'contribution_date': contrib.contribution_date.isoformat(),
+                    'cycle': contrib.cycle,
+                    'source': contrib.source,
+                    'last_updated': contrib.last_updated.isoformat()
+                }
+                writer.writerow(row)
+
+        logger.info(f"Saved {len(self.contributions)} contributions to {output_file}")
+
 
 async def main():
     parser = argparse.ArgumentParser(description='Fetch data from API and save to CSV')
     parser.add_argument('--politicians', action='store_true', help='Fetch politicians')
     parser.add_argument('--bills', action='store_true', help='Fetch bills')
-    parser.add_argument('--all', action='store_true', help='Fetch both politicians and bills')
+    parser.add_argument('--contributions', action='store_true', help='Fetch campaign contributions')
+    parser.add_argument('--all', action='store_true', help='Fetch politicians, bills, and contributions')
     parser.add_argument('--congress', type=int, default=119, help='Congress number (default: 119)')
-    parser.add_argument('--state', type=str, help='State filter for politicians (e.g., UT)')
+    parser.add_argument('--state', type=str, help='State filter for politicians/contributions (e.g., UT)')
     parser.add_argument('--bill-type', type=str, default='hr', help='Bill type (default: hr)')
     parser.add_argument('--max-bills', type=int, help='Maximum bills to fetch')
+    parser.add_argument('--cycle', type=int, default=2024, help='Election cycle for contributions (default: 2024)')
+    parser.add_argument('--max-contributions', type=int, default=100, help='Max contributions per politician (default: 100)')
 
     args = parser.parse_args()
 
     # Default to --all if nothing specified
-    if not (args.politicians or args.bills or args.all):
+    if not (args.politicians or args.bills or args.contributions or args.all):
         args.all = True
 
     exporter = CSVExporter()
@@ -209,6 +332,15 @@ async def main():
             max_bills=args.max_bills
         )
         exporter.save_bills_csv()
+
+    # Fetch contributions
+    if args.contributions or args.all:
+        await exporter.fetch_contributions(
+            state_filter=args.state,
+            cycle=args.cycle,
+            max_per_politician=args.max_contributions
+        )
+        exporter.save_contributions_csv()
 
     logger.info("Done! CSV files are in scripts/data/")
 

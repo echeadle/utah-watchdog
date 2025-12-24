@@ -16,6 +16,7 @@ venv/
 
 # Data files (can be regenerated from API)
 scripts/data/*.csv
+scripts/data/.~lock.*
 
 # UV
 .python-version

@@ -20,8 +20,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from src.models.politician import Politician, Chamber, Party
 from src.models.legislation import Bill, BillType, BillStatus
+from src.models.finance import Contribution, ContributionType
 from src.config.settings import settings
-from src.database.normalization import normalize_politician, normalize_legislation
+from src.database.normalization import normalize_politician, normalize_legislation, normalize_contribution
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ class CSVIngester:
             'politicians_updated': 0,
             'bills_inserted': 0,
             'bills_updated': 0,
+            'contributions_inserted': 0,
+            'contributions_updated': 0,
             'errors': 0
         }
 
@@ -199,13 +202,102 @@ class CSVIngester:
             f"{self.stats['bills_updated']} updated"
         )
 
-    async def run(self, ingest_politicians: bool = False, ingest_bills: bool = False):
+    async def ingest_contributions(self):
+        """Ingest contributions from CSV file."""
+        from decimal import Decimal
+        csv_file = DATA_DIR / "contributions.csv"
+
+        if not csv_file.exists():
+            logger.error(f"CSV file not found: {csv_file}")
+            return
+
+        logger.info(f"Reading contributions from {csv_file}...")
+
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+
+            for row in reader:
+                try:
+                    # Convert CSV row to Contribution model
+                    contribution = Contribution(
+                        id=row['id'],
+                        bioguide_id=row['bioguide_id'] or None,
+                        recipient_name=row['recipient_name'],
+                        contributor_name=row['contributor_name'],
+                        contributor_type=ContributionType(row['contributor_type']),
+                        contributor_employer=row['contributor_employer'] or None,
+                        contributor_occupation=row['contributor_occupation'] or None,
+                        contributor_city=row['contributor_city'] or None,
+                        contributor_state=row['contributor_state'] or None,
+                        contributor_zip=row['contributor_zip'] or None,
+                        amount=Decimal(row['amount']),
+                        contribution_date=date.fromisoformat(row['contribution_date']),
+                        cycle=row['cycle'],
+                        source=row['source'],
+                        last_updated=date.fromisoformat(row['last_updated'])
+                    )
+
+                    # Convert to dict
+                    contrib_data = contribution.model_dump()
+
+                    # Convert Decimal to float for MongoDB
+                    if 'amount' in contrib_data:
+                        contrib_data['amount'] = float(contrib_data['amount'])
+
+                    # Convert enum to string
+                    if 'contributor_type' in contrib_data:
+                        contrib_data['contributor_type'] = contrib_data['contributor_type'].value if hasattr(contrib_data['contributor_type'], 'value') else contrib_data['contributor_type']
+
+                    # Convert date to datetime for MongoDB
+                    if contrib_data.get('contribution_date'):
+                        contrib_data['contribution_date'] = datetime.combine(
+                            contrib_data['contribution_date'],
+                            datetime.min.time()
+                        )
+
+                    if contrib_data.get('last_updated'):
+                        if isinstance(contrib_data['last_updated'], date):
+                            contrib_data['last_updated'] = datetime.combine(
+                                contrib_data['last_updated'],
+                                datetime.min.time()
+                            )
+
+                    # Normalize
+                    normalized_data = normalize_contribution(contrib_data)
+
+                    # Upsert to database using composite key (id + bioguide_id)
+                    # This prevents duplicate FEC transaction IDs from overwriting each other
+                    result = await self.db.contributions.update_one(
+                        {
+                            "id": contribution.id,
+                            "bioguide_id": contribution.bioguide_id
+                        },
+                        {"$set": normalized_data},
+                        upsert=True
+                    )
+
+                    if result.upserted_id:
+                        self.stats['contributions_inserted'] += 1
+                    else:
+                        self.stats['contributions_updated'] += 1
+
+                except Exception as e:
+                    logger.error(f"Error ingesting contribution {row.get('id', 'unknown')}: {e}")
+                    self.stats['errors'] += 1
+
+        logger.info(
+            f"Contributions: {self.stats['contributions_inserted']} inserted, "
+            f"{self.stats['contributions_updated']} updated"
+        )
+
+    async def run(self, ingest_politicians: bool = False, ingest_bills: bool = False, ingest_contributions: bool = False):
         """
         Run the CSV ingestion.
 
         Args:
             ingest_politicians: Whether to ingest politicians
             ingest_bills: Whether to ingest bills
+            ingest_contributions: Whether to ingest contributions
         """
         try:
             await self.connect()
@@ -216,9 +308,13 @@ class CSVIngester:
             if ingest_bills:
                 await self.ingest_bills()
 
+            if ingest_contributions:
+                await self.ingest_contributions()
+
             logger.info("\n=== Ingestion Complete ===")
             logger.info(f"Politicians: {self.stats['politicians_inserted']} inserted, {self.stats['politicians_updated']} updated")
             logger.info(f"Bills: {self.stats['bills_inserted']} inserted, {self.stats['bills_updated']} updated")
+            logger.info(f"Contributions: {self.stats['contributions_inserted']} inserted, {self.stats['contributions_updated']} updated")
             logger.info(f"Errors: {self.stats['errors']}")
 
         finally:
@@ -229,19 +325,21 @@ async def main():
     parser = argparse.ArgumentParser(description='Ingest data from CSV files to database')
     parser.add_argument('--politicians', action='store_true', help='Ingest politicians')
     parser.add_argument('--bills', action='store_true', help='Ingest bills')
-    parser.add_argument('--all', action='store_true', help='Ingest both politicians and bills')
+    parser.add_argument('--contributions', action='store_true', help='Ingest campaign contributions')
+    parser.add_argument('--all', action='store_true', help='Ingest politicians, bills, and contributions')
 
     args = parser.parse_args()
 
     # Default to --all if nothing specified
-    if not (args.politicians or args.bills or args.all):
+    if not (args.politicians or args.bills or args.contributions or args.all):
         args.all = True
 
     ingester = CSVIngester()
 
     await ingester.run(
         ingest_politicians=args.politicians or args.all,
-        ingest_bills=args.bills or args.all
+        ingest_bills=args.bills or args.all,
+        ingest_contributions=args.contributions or args.all
     )
 
 
