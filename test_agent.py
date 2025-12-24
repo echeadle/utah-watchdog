@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.agents.research_agent import research_agent
 from src.agents.dependencies import get_agent_deps
+from pydantic_ai import ModelSettings
 
 
 # ============================================================================
@@ -143,8 +144,9 @@ async def run_test(query_info: dict, deps) -> dict:
     category = query_info["category"]
     
     try:
-        # Run the agent
-        result = await research_agent.run(query, deps=deps)
+        # Run the agent with tool_choice='required' to ensure tools are used
+        model_settings = ModelSettings(tool_choice='required')
+        result = await research_agent.run(query, deps=deps, model_settings=model_settings)
         
         # Extract response
         response = result.data if hasattr(result, 'data') else str(result)
@@ -153,11 +155,10 @@ async def run_test(query_info: dict, deps) -> dict:
         tool_calls = []
         if hasattr(result, 'all_messages'):
             for msg in result.all_messages():
-                if hasattr(msg, 'kind') and msg.kind == 'request':
-                    if hasattr(msg, 'parts'):
-                        for part in msg.parts:
-                            if hasattr(part, 'part_kind') and part.part_kind == 'tool-call':
-                                tool_calls.append(part.tool_name)
+                if hasattr(msg, 'parts'):
+                    for part in msg.parts:
+                        if hasattr(part, 'part_kind') and part.part_kind == 'tool-call':
+                            tool_calls.append(part.tool_name)
         
         return {
             "success": True,
@@ -324,7 +325,8 @@ async def interactive_mode():
                 continue
             
             print("\n🤖 Thinking...")
-            result = await research_agent.run(query, deps=deps)
+            model_settings = ModelSettings(tool_choice='required')
+            result = await research_agent.run(query, deps=deps, model_settings=model_settings)
             
             print("\n💬 Response:")
             print(result.data if hasattr(result, 'data') else str(result))
@@ -333,11 +335,10 @@ async def interactive_mode():
             tool_calls = []
             if hasattr(result, 'all_messages'):
                 for msg in result.all_messages():
-                    if hasattr(msg, 'kind') and msg.kind == 'request':
-                        if hasattr(msg, 'parts'):
-                            for part in msg.parts:
-                                if hasattr(part, 'part_kind') and part.part_kind == 'tool-call':
-                                    tool_calls.append(part.tool_name)
+                    if hasattr(msg, 'parts'):
+                        for part in msg.parts:
+                            if hasattr(part, 'part_kind') and part.part_kind == 'tool-call':
+                                tool_calls.append(part.tool_name)
             
             if tool_calls:
                 print(f"\n🔧 Tools used: {', '.join(set(tool_calls))}")
@@ -392,7 +393,8 @@ Examples:
     elif args.query:
         # Single query mode
         deps = await get_agent_deps()
-        result = await research_agent.run(args.query, deps=deps)
+        model_settings = ModelSettings(tool_choice='required')
+        result = await research_agent.run(args.query, deps=deps, model_settings=model_settings)
         print(result.data if hasattr(result, 'data') else str(result))
     else:
         # Run full test suite

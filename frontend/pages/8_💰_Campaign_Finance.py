@@ -243,12 +243,48 @@ def search_contributions(
     return results
 
 
+def get_contributions_timeline(bioguide_id: str):
+    """Get contributions over time for trend visualization"""
+    db = get_db()
+
+    pipeline = [
+        {"$match": {
+            "bioguide_id": bioguide_id,
+            "contribution_date": {"$ne": None}
+        }},
+        {
+            "$group": {
+                "_id": {
+                    "$dateToString": {
+                        "format": "%Y-%m",
+                        "date": "$contribution_date"
+                    }
+                },
+                "total_amount": {"$sum": "$amount"},
+                "num_contributions": {"$sum": 1}
+            }
+        },
+        {"$sort": {"_id": 1}}
+    ]
+
+    results = list(db.contributions.aggregate(pipeline))
+
+    return [
+        {
+            "month": r["_id"],
+            "total_amount": float(r["total_amount"]),
+            "num_contributions": r["num_contributions"]
+        }
+        for r in results
+    ]
+
+
 def get_overall_stats():
     """Get overall contribution statistics"""
     db = get_db()
-    
+
     total_contributions = db.contributions.count_documents({})
-    
+
     pipeline = [
         {
             "$group": {
@@ -258,16 +294,16 @@ def get_overall_stats():
             }
         }
     ]
-    
+
     result = list(db.contributions.aggregate(pipeline))
-    
+
     if result:
         return {
             "total_contributions": total_contributions,
             "total_raised": float(result[0]["total_raised"]),
             "avg_contribution": float(result[0]["avg_contribution"])
         }
-    
+
     return {
         "total_contributions": 0,
         "total_raised": 0.0,
@@ -305,30 +341,87 @@ def display_contribution_summary(politician: dict, summary: dict):
         )
 
 
+def display_contribution_timeline(timeline: list):
+    """Display contribution timeline chart"""
+    if not timeline or len(timeline) < 2:
+        st.info("Not enough data for timeline visualization")
+        return
+
+    st.markdown("### 📈 Contribution Timeline")
+    st.caption("Contributions over time")
+
+    df = pd.DataFrame(timeline)
+
+    # Create dual-axis chart
+    fig = px.line(
+        df,
+        x='month',
+        y='total_amount',
+        title='Contributions Over Time',
+        labels={'month': 'Month', 'total_amount': 'Total Amount ($)'},
+        markers=True
+    )
+    fig.update_layout(height=400)
+    fig.update_traces(line_color='#1f77b4', line_width=3)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Add count chart
+    fig2 = px.bar(
+        df,
+        x='month',
+        y='num_contributions',
+        title='Number of Contributions Over Time',
+        labels={'month': 'Month', 'num_contributions': 'Number of Contributions'},
+        color='num_contributions',
+        color_continuous_scale='Purples'
+    )
+    fig2.update_layout(height=300, showlegend=False)
+    st.plotly_chart(fig2, use_container_width=True)
+
+
 def display_top_donors_table(donors: list):
-    """Display top donors in a table"""
+    """Display top donors with visualization and table"""
     if not donors:
         st.info("No donor data available")
         return
-    
+
     st.markdown("### 💳 Top Individual Donors")
     st.caption("Individuals who have contributed the most")
-    
+
+    # Add bar chart for top 10 donors
+    if len(donors) >= 3:
+        df = pd.DataFrame(donors[:10])
+        fig = px.bar(
+            df,
+            x='total_amount',
+            y='name',
+            orientation='h',
+            title='Top 10 Individual Donors',
+            labels={'total_amount': 'Total Amount ($)', 'name': 'Donor'},
+            color='total_amount',
+            color_continuous_scale='Reds',
+            hover_data=['employer', 'num_contributions']
+        )
+        fig.update_layout(height=400, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Detailed Breakdown")
+
     for i, donor in enumerate(donors, 1):
         col1, col2, col3 = st.columns([4, 2, 1])
-        
+
         with col1:
             st.markdown(f"**{i}. {donor['name']}**")
             st.caption(f"Employer: {donor['employer']}")
             if donor['city'] and donor['state']:
                 st.caption(f"📍 {donor['city']}, {donor['state']}")
-        
+
         with col2:
             st.metric("Total Given", f"${donor['total_amount']:,.2f}")
-        
+
         with col3:
             st.metric("Times", donor['num_contributions'])
-        
+
         st.divider()
 
 
@@ -559,27 +652,32 @@ def main():
     # ========================================================================
     # Tabs for Different Views
     # ========================================================================
-    
-    tab1, tab2, tab3, tab4 = st.tabs([
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📈 Timeline",
         "💳 Top Donors",
         "🏢 Top Employers",
         "🗺️ By State",
         "⏱️ Recent Contributions"
     ])
-    
+
     with tab1:
+        timeline = get_contributions_timeline(bioguide_id)
+        display_contribution_timeline(timeline)
+
+    with tab2:
         top_donors = get_top_donors(bioguide_id, limit=15)
         display_top_donors_table(top_donors)
-    
-    with tab2:
+
+    with tab3:
         top_employers = get_top_employers(bioguide_id, limit=10)
         display_top_employers_table(top_employers)
-    
-    with tab3:
+
+    with tab4:
         by_state = get_contributions_by_state(bioguide_id)
         display_state_breakdown(by_state)
-    
-    with tab4:
+
+    with tab5:
         recent = get_recent_contributions(bioguide_id, limit=25)
         display_recent_contributions(recent)
     
