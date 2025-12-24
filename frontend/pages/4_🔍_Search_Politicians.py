@@ -31,29 +31,42 @@ def search_politicians(
 ):
     """Search politicians with multiple filters"""
     db = get_db()
-    
+
     filter_dict = {}
-    
-    # Name search (case-insensitive regex)
+
+    # Name search (flexible - searches first name, last name, and full name)
     if query:
-        filter_dict["full_name"] = {"$regex": query, "$options": "i"}
-    
+        # Split query into words for more flexible matching
+        words = query.strip().split()
+        if len(words) == 1:
+            # Single word - search in any name field
+            filter_dict["$or"] = [
+                {"first_name": {"$regex": query, "$options": "i"}},
+                {"last_name": {"$regex": query, "$options": "i"}},
+                {"full_name": {"$regex": query, "$options": "i"}}
+            ]
+        else:
+            # Multiple words - create pattern that matches all words in any order
+            # This allows "John Curtis" to match "John R. Curtis"
+            word_patterns = [{"full_name": {"$regex": re.escape(word), "$options": "i"}} for word in words]
+            filter_dict["$and"] = word_patterns
+
     if state and state != "All States":
         filter_dict["state"] = state
-    
+
     if party and party != "All Parties":
         filter_dict["party"] = party
-    
+
     if chamber and chamber != "All Chambers":
         filter_dict["chamber"] = chamber.lower().replace(" ", "_")
-    
+
     if in_office is not None:
         filter_dict["in_office"] = in_office
-    
+
     results = list(db.politicians.find(filter_dict)
                    .sort([("state", 1), ("last_name", 1)])
                    .limit(200))
-    
+
     return results
 
 
