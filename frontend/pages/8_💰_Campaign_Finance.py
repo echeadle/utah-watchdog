@@ -1495,7 +1495,7 @@ def main():
                 st.caption(f"{party}-{state}")
 
                 st.metric("Total Raised", f"${summary['total_raised']:,.2f}")
-                st.metric("Contributions", f"{summary['total_contributions']:,}")
+                st.metric("Contributions", f"{summary['num_contributions']:,}")
                 st.metric("Avg Amount", f"${summary['avg_contribution']:,.2f}")
 
         st.divider()
