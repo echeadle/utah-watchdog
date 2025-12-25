@@ -429,6 +429,138 @@ def get_overall_stats():
     }
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_in_state_vs_out_state(bioguide_id: str, politician_state: str):
+    """Get breakdown of in-state vs out-of-state contributions"""
+    db = get_db()
+
+    # In-state contributions
+    in_state_pipeline = [
+        {"$match": {
+            "bioguide_id": bioguide_id,
+            "contributor_state": politician_state
+        }},
+        {
+            "$group": {
+                "_id": None,
+                "total_amount": {"$sum": "$amount"},
+                "count": {"$sum": 1},
+                "avg_amount": {"$avg": "$amount"}
+            }
+        }
+    ]
+
+    # Out-of-state contributions
+    out_state_pipeline = [
+        {"$match": {
+            "bioguide_id": bioguide_id,
+            "contributor_state": {"$ne": politician_state, "$ne": None, "$ne": ""}
+        }},
+        {
+            "$group": {
+                "_id": None,
+                "total_amount": {"$sum": "$amount"},
+                "count": {"$sum": 1},
+                "avg_amount": {"$avg": "$amount"}
+            }
+        }
+    ]
+
+    in_state_result = list(db.contributions.aggregate(in_state_pipeline))
+    out_state_result = list(db.contributions.aggregate(out_state_pipeline))
+
+    in_state_data = {
+        "total_amount": float(in_state_result[0]["total_amount"]) if in_state_result else 0.0,
+        "count": in_state_result[0]["count"] if in_state_result else 0,
+        "avg_amount": float(in_state_result[0]["avg_amount"]) if in_state_result else 0.0
+    }
+
+    out_state_data = {
+        "total_amount": float(out_state_result[0]["total_amount"]) if out_state_result else 0.0,
+        "count": out_state_result[0]["count"] if out_state_result else 0,
+        "avg_amount": float(out_state_result[0]["avg_amount"]) if out_state_result else 0.0
+    }
+
+    total_amount = in_state_data["total_amount"] + out_state_data["total_amount"]
+    total_count = in_state_data["count"] + out_state_data["count"]
+
+    return {
+        "in_state": in_state_data,
+        "out_state": out_state_data,
+        "in_state_pct_amount": (in_state_data["total_amount"] / total_amount * 100) if total_amount > 0 else 0,
+        "out_state_pct_amount": (out_state_data["total_amount"] / total_amount * 100) if total_amount > 0 else 0,
+        "in_state_pct_count": (in_state_data["count"] / total_count * 100) if total_count > 0 else 0,
+        "out_state_pct_count": (out_state_data["count"] / total_count * 100) if total_count > 0 else 0,
+        "politician_state": politician_state
+    }
+
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_small_vs_large_dollar_breakdown(bioguide_id: str):
+    """Get breakdown of contributions by size category"""
+    db = get_db()
+
+    # Define contribution categories
+    categories = [
+        {"name": "Small Dollar (<$200)", "label": "Small Dollar", "min": 0, "max": 199.99, "description": "Grassroots contributions"},
+        {"name": "Mid-Tier ($200-$999)", "label": "Mid-Tier", "min": 200, "max": 999.99, "description": "Medium contributions"},
+        {"name": "Major Donors ($1,000-$2,899)", "label": "Major Donors", "min": 1000, "max": 2899.99, "description": "Large contributions"},
+        {"name": "Max Donors ($2,900+)", "label": "Max Donors", "min": 2900, "max": 999999, "description": "At or near FEC limit"}
+    ]
+
+    breakdown = []
+
+    for category in categories:
+        pipeline = [
+            {"$match": {
+                "bioguide_id": bioguide_id,
+                "amount": {
+                    "$gte": category["min"],
+                    "$lte": category["max"]
+                }
+            }},
+            {
+                "$group": {
+                    "_id": None,
+                    "total_amount": {"$sum": "$amount"},
+                    "count": {"$sum": 1},
+                    "avg_amount": {"$avg": "$amount"}
+                }
+            }
+        ]
+
+        result = list(db.contributions.aggregate(pipeline))
+
+        if result:
+            breakdown.append({
+                "category": category["label"],
+                "full_name": category["name"],
+                "description": category["description"],
+                "total_amount": float(result[0]["total_amount"]),
+                "count": result[0]["count"],
+                "avg_amount": float(result[0]["avg_amount"])
+            })
+        else:
+            breakdown.append({
+                "category": category["label"],
+                "full_name": category["name"],
+                "description": category["description"],
+                "total_amount": 0.0,
+                "count": 0,
+                "avg_amount": 0.0
+            })
+
+    # Calculate percentages
+    total_amount = sum(b["total_amount"] for b in breakdown)
+    total_count = sum(b["count"] for b in breakdown)
+
+    for item in breakdown:
+        item["pct_amount"] = (item["total_amount"] / total_amount * 100) if total_amount > 0 else 0
+        item["pct_count"] = (item["count"] / total_count * 100) if total_count > 0 else 0
+
+    return breakdown
+
+
 # ============================================================================
 # Display Functions
 # ============================================================================
@@ -961,6 +1093,239 @@ def display_contribution_size_distribution(distribution: list):
             st.info(f"**Highest Revenue:** {max_amount_bracket['bracket']} (${max_amount_bracket['total']:,.2f})")
 
 
+def display_in_state_vs_out_state(data: dict):
+    """Display in-state vs out-of-state contribution breakdown"""
+    if not data:
+        st.info("No geographic data available")
+        return
+
+    politician_state = data["politician_state"]
+
+    st.markdown("### 🏠 In-State vs Out-of-State Contributions")
+    st.caption(f"Comparing contributions from {politician_state} vs other states")
+
+    # Summary metrics
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(f"#### 📍 In-State ({politician_state})")
+        st.metric("Total Raised", f"${data['in_state']['total_amount']:,.2f}")
+        st.metric("Number of Contributions", f"{data['in_state']['count']:,}")
+        st.metric("Average Amount", f"${data['in_state']['avg_amount']:,.2f}")
+        st.progress(data['in_state_pct_amount'] / 100)
+        st.caption(f"{data['in_state_pct_amount']:.1f}% of total funds | {data['in_state_pct_count']:.1f}% of contributions")
+
+    with col2:
+        st.markdown("#### 🌎 Out-of-State")
+        st.metric("Total Raised", f"${data['out_state']['total_amount']:,.2f}")
+        st.metric("Number of Contributions", f"{data['out_state']['count']:,}")
+        st.metric("Average Amount", f"${data['out_state']['avg_amount']:,.2f}")
+        st.progress(data['out_state_pct_amount'] / 100)
+        st.caption(f"{data['out_state_pct_amount']:.1f}% of total funds | {data['out_state_pct_count']:.1f}% of contributions")
+
+    # Visualizations
+    st.markdown("#### 📊 Visual Breakdown")
+
+    viz_col1, viz_col2 = st.columns(2)
+
+    with viz_col1:
+        # Pie chart by amount
+        amount_data = pd.DataFrame([
+            {"Location": f"In-State ({politician_state})", "Amount": data['in_state']['total_amount']},
+            {"Location": "Out-of-State", "Amount": data['out_state']['total_amount']}
+        ])
+
+        fig_amount = px.pie(
+            amount_data,
+            values='Amount',
+            names='Location',
+            title='Total Contributions by Location',
+            color_discrete_sequence=['#2E86AB', '#A23B72']
+        )
+        fig_amount.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_amount, use_container_width=True)
+
+    with viz_col2:
+        # Pie chart by count
+        count_data = pd.DataFrame([
+            {"Location": f"In-State ({politician_state})", "Count": data['in_state']['count']},
+            {"Location": "Out-of-State", "Count": data['out_state']['count']}
+        ])
+
+        fig_count = px.pie(
+            count_data,
+            values='Count',
+            names='Location',
+            title='Number of Contributions by Location',
+            color_discrete_sequence=['#2E86AB', '#A23B72']
+        )
+        fig_count.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_count, use_container_width=True)
+
+    # Key Insights
+    st.markdown("#### 💡 Key Insights")
+
+    if data['in_state_pct_amount'] > 50:
+        st.success(f"**Strong Local Support:** {data['in_state_pct_amount']:.1f}% of funds come from {politician_state} residents")
+    else:
+        st.info(f"**National Fundraising:** {data['out_state_pct_amount']:.1f}% of funds come from outside {politician_state}")
+
+    # Average donation comparison
+    if data['in_state']['avg_amount'] > data['out_state']['avg_amount']:
+        diff = data['in_state']['avg_amount'] - data['out_state']['avg_amount']
+        st.caption(f"In-state donors give ${diff:,.2f} more on average than out-of-state donors")
+    else:
+        diff = data['out_state']['avg_amount'] - data['in_state']['avg_amount']
+        st.caption(f"Out-of-state donors give ${diff:,.2f} more on average than in-state donors")
+
+
+def display_small_vs_large_dollar(breakdown: list):
+    """Display small dollar vs large dollar contribution breakdown"""
+    if not breakdown:
+        st.info("No contribution data available")
+        return
+
+    st.markdown("### 💵 Small Dollar vs Large Dollar Analysis")
+    st.caption("Fundraising strategy breakdown by contribution size")
+
+    # Filter out empty categories
+    breakdown_filtered = [b for b in breakdown if b['count'] > 0]
+
+    if not breakdown_filtered:
+        st.info("No contributions in any category")
+        return
+
+    # Summary Cards
+    st.markdown("#### 📋 Category Breakdown")
+
+    cols = st.columns(len(breakdown_filtered))
+
+    for i, category_data in enumerate(breakdown_filtered):
+        with cols[i]:
+            st.markdown(f"**{category_data['category']}**")
+            st.caption(category_data['description'])
+            st.metric("Total", f"${category_data['total_amount']:,.0f}")
+            st.metric("Count", f"{category_data['count']:,}")
+            st.metric("Average", f"${category_data['avg_amount']:,.2f}")
+
+            # Progress bars
+            st.caption("% of Total Revenue")
+            st.progress(category_data['pct_amount'] / 100)
+            st.caption(f"{category_data['pct_amount']:.1f}%")
+
+            st.caption("% of Contributions")
+            st.progress(category_data['pct_count'] / 100)
+            st.caption(f"{category_data['pct_count']:.1f}%")
+
+    st.divider()
+
+    # Visualizations
+    st.markdown("#### 📊 Visual Comparison")
+
+    df = pd.DataFrame(breakdown_filtered)
+
+    viz_col1, viz_col2 = st.columns(2)
+
+    with viz_col1:
+        # Amount breakdown
+        fig_amount = px.pie(
+            df,
+            values='total_amount',
+            names='category',
+            title='Total Revenue by Category',
+            color_discrete_sequence=px.colors.qualitative.Set2
+        )
+        fig_amount.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_amount, use_container_width=True)
+
+    with viz_col2:
+        # Count breakdown
+        fig_count = px.pie(
+            df,
+            values='count',
+            names='category',
+            title='Number of Contributions by Category',
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        fig_count.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_count, use_container_width=True)
+
+    # Bar charts for detailed comparison
+    st.markdown("#### 📈 Detailed Metrics")
+
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        fig_bar_amount = px.bar(
+            df,
+            x='category',
+            y='total_amount',
+            title='Total Amount by Category',
+            labels={'category': 'Category', 'total_amount': 'Total Amount ($)'},
+            color='total_amount',
+            color_continuous_scale='Blues'
+        )
+        fig_bar_amount.update_layout(showlegend=False)
+        st.plotly_chart(fig_bar_amount, use_container_width=True)
+
+    with chart_col2:
+        fig_bar_count = px.bar(
+            df,
+            x='category',
+            y='count',
+            title='Number of Contributions by Category',
+            labels={'category': 'Category', 'count': 'Count'},
+            color='count',
+            color_continuous_scale='Greens'
+        )
+        fig_bar_count.update_layout(showlegend=False)
+        st.plotly_chart(fig_bar_count, use_container_width=True)
+
+    # Detailed table
+    st.markdown("#### 📄 Summary Table")
+
+    display_df = pd.DataFrame({
+        'Category': df['full_name'],
+        'Total Amount': df['total_amount'].apply(lambda x: f"${x:,.2f}"),
+        '% of Revenue': df['pct_amount'].apply(lambda x: f"{x:.1f}%"),
+        'Count': df['count'],
+        '% of Contributions': df['pct_count'].apply(lambda x: f"{x:.1f}%"),
+        'Avg Amount': df['avg_amount'].apply(lambda x: f"${x:,.2f}")
+    })
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    # Key Insights
+    st.markdown("#### 💡 Key Insights")
+
+    insight_col1, insight_col2 = st.columns(2)
+
+    with insight_col1:
+        # Find small dollar info
+        small_dollar = next((b for b in breakdown_filtered if b['category'] == 'Small Dollar'), None)
+        if small_dollar and small_dollar['pct_amount'] > 30:
+            st.success(f"**Grassroots Support:** {small_dollar['pct_amount']:.1f}% of funds from small donors (<$200)")
+        elif small_dollar:
+            st.info(f"**Small Donors:** {small_dollar['pct_amount']:.1f}% of revenue, {small_dollar['pct_count']:.1f}% of contributions")
+
+    with insight_col2:
+        # Find max donor info
+        max_donors = next((b for b in breakdown_filtered if b['category'] == 'Max Donors'), None)
+        if max_donors and max_donors['count'] > 0:
+            st.info(f"**Max Donors:** {max_donors['count']:,} contributors at/near FEC limit (${max_donors['total_amount']:,.0f})")
+
+    # Fundraising strategy assessment
+    small_pct = next((b['pct_amount'] for b in breakdown_filtered if b['category'] == 'Small Dollar'), 0)
+    large_pct = sum(b['pct_amount'] for b in breakdown_filtered if b['category'] in ['Major Donors', 'Max Donors'])
+
+    if small_pct > large_pct:
+        st.success("🌱 **Grassroots-Focused Strategy:** This campaign relies more on small-dollar contributions")
+    elif large_pct > small_pct * 2:
+        st.warning("💰 **Large Donor Strategy:** This campaign is heavily funded by major donors")
+    else:
+        st.info("⚖️ **Balanced Strategy:** This campaign has a mix of small and large dollar contributions")
+
+
 # ============================================================================
 # Main Page
 # ============================================================================
@@ -1234,11 +1599,13 @@ def main():
     # Tabs for Different Views
     # ========================================================================
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "📈 Timeline",
         "💳 Top Donors",
         "🏢 Top Employers",
         "🗺️ By State",
+        "🏠 In-State vs Out",
+        "💵 Small vs Large $",
         "📊 Size Distribution",
         "🏛️ Source Breakdown",
         "⏱️ Recent Contributions"
@@ -1261,14 +1628,22 @@ def main():
         display_state_breakdown(by_state)
 
     with tab5:
+        in_out_state_data = get_in_state_vs_out_state(bioguide_id, state)
+        display_in_state_vs_out_state(in_out_state_data)
+
+    with tab6:
+        small_large_breakdown = get_small_vs_large_dollar_breakdown(bioguide_id)
+        display_small_vs_large_dollar(small_large_breakdown)
+
+    with tab7:
         size_distribution = get_contribution_size_distribution(bioguide_id)
         display_contribution_size_distribution(size_distribution)
 
-    with tab6:
+    with tab8:
         source_breakdown = get_contribution_source_breakdown(bioguide_id)
         display_contribution_source_breakdown(source_breakdown, bioguide_id)
 
-    with tab7:
+    with tab9:
         recent = get_recent_contributions(bioguide_id, limit=25)
         display_recent_contributions(recent)
     
