@@ -1534,10 +1534,16 @@ def main():
 
             with source_cols[i]:
                 st.markdown(f"**{politician.get('full_name', 'Unknown')}**")
+                st.caption(f"ID: {bioguide_id}")  # Debug: show bioguide_id
                 breakdown = get_contribution_source_breakdown(bioguide_id)
 
                 if breakdown:
                     df_breakdown = pd.DataFrame(breakdown)
+
+                    # Debug: show total amount
+                    total_amt = sum(b['total'] for b in breakdown)
+                    st.caption(f"Total in breakdown: ${total_amt:,.2f}")
+
                     fig = px.pie(
                         df_breakdown,
                         values='total',
