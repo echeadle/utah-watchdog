@@ -41,6 +41,7 @@ def get_db():
 # Data Fetching Functions
 # ============================================================================
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_politicians_with_contributions():
     """Get list of politicians who have contribution data"""
     db = get_db()
@@ -63,6 +64,7 @@ def get_politicians_with_contributions():
     return politicians
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_contribution_summary(bioguide_id: str):
     """Get total contributions summary for a politician"""
     db = get_db()
@@ -95,6 +97,7 @@ def get_contribution_summary(bioguide_id: str):
     }
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_top_donors(bioguide_id: str, limit: int = 10):
     """Get top individual contributors"""
     db = get_db()
@@ -132,6 +135,7 @@ def get_top_donors(bioguide_id: str, limit: int = 10):
     ]
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_top_employers(bioguide_id: str, limit: int = 10):
     """Get top employers/organizations by total contributions"""
     db = get_db()
@@ -164,6 +168,7 @@ def get_top_employers(bioguide_id: str, limit: int = 10):
     ]
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_contributions_by_state(bioguide_id: str):
     """Get contributions grouped by state"""
     db = get_db()
@@ -196,6 +201,7 @@ def get_contributions_by_state(bioguide_id: str):
     ]
 
 
+@st.cache_data(ttl=1800)  # Cache for 30 min (recent changes more often)
 def get_recent_contributions(bioguide_id: str, limit: int = 20):
     """Get recent individual contributions"""
     db = get_db()
@@ -213,36 +219,48 @@ def search_contributions(
     state: str = None,
     min_amount: float = None,
     max_amount: float = None,
+    start_date = None,
+    end_date = None,
     limit: int = 50
 ):
     """Search contributions by various criteria"""
     db = get_db()
-    
+
     filter_dict = {}
-    
+
     if bioguide_id:
         filter_dict["bioguide_id"] = bioguide_id
-    
+
     if employer:
         filter_dict["contributor_employer"] = {"$regex": employer, "$options": "i"}
-    
+
     if state:
         filter_dict["contributor_state"] = state
-    
+
     if min_amount is not None or max_amount is not None:
         filter_dict["amount"] = {}
         if min_amount is not None:
             filter_dict["amount"]["$gte"] = float(min_amount)
         if max_amount is not None:
             filter_dict["amount"]["$lte"] = float(max_amount)
-    
+
+    if start_date is not None or end_date is not None:
+        filter_dict["contribution_date"] = {}
+        if start_date is not None:
+            # Convert date to datetime for MongoDB comparison
+            filter_dict["contribution_date"]["$gte"] = datetime.combine(start_date, datetime.min.time())
+        if end_date is not None:
+            # Convert date to datetime for MongoDB comparison
+            filter_dict["contribution_date"]["$lte"] = datetime.combine(end_date, datetime.max.time())
+
     results = list(db.contributions.find(filter_dict)
                    .sort("amount", -1)
                    .limit(limit))
-    
+
     return results
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_contributions_timeline(bioguide_id: str):
     """Get contributions over time for trend visualization"""
     db = get_db()
@@ -279,6 +297,87 @@ def get_contributions_timeline(bioguide_id: str):
     ]
 
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_contribution_source_breakdown(bioguide_id: str):
+    """Get breakdown of contributions by source type (Individual vs PAC)"""
+    db = get_db()
+
+    pipeline = [
+        {"$match": {"bioguide_id": bioguide_id}},
+        {
+            "$group": {
+                "_id": "$contributor_type",
+                "count": {"$sum": 1},
+                "total_amount": {"$sum": "$amount"}
+            }
+        },
+        {"$sort": {"total_amount": -1}}
+    ]
+
+    results = list(db.contributions.aggregate(pipeline))
+
+    breakdown = []
+    for result in results:
+        source_type = result["_id"] or "Unknown"
+        breakdown.append({
+            "type": source_type,
+            "count": result["count"],
+            "total": float(result["total_amount"])
+        })
+
+    return breakdown
+
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_contribution_size_distribution(bioguide_id: str):
+    """Get contribution distribution by size brackets"""
+    db = get_db()
+
+    # Define contribution size brackets
+    brackets = [
+        {"name": "$1 - $100", "min": 1, "max": 100},
+        {"name": "$101 - $500", "min": 101, "max": 500},
+        {"name": "$501 - $1,000", "min": 501, "max": 1000},
+        {"name": "$1,001 - $2,000", "min": 1001, "max": 2000},
+        {"name": "$2,001 - $2,900", "min": 2001, "max": 2900},
+        {"name": "$2,901+", "min": 2901, "max": float('inf')}
+    ]
+
+    distribution = []
+
+    for bracket in brackets:
+        query = {
+            "bioguide_id": bioguide_id,
+            "amount": {
+                "$gte": bracket["min"],
+                "$lte": bracket["max"] if bracket["max"] != float('inf') else 999999
+            }
+        }
+
+        count = db.contributions.count_documents(query)
+
+        # Calculate total amount in this bracket
+        pipeline = [
+            {"$match": query},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": "$amount"}
+            }}
+        ]
+
+        result = list(db.contributions.aggregate(pipeline))
+        total_amount = float(result[0]["total"]) if result else 0.0
+
+        distribution.append({
+            "bracket": bracket["name"],
+            "count": count,
+            "total": total_amount
+        })
+
+    return distribution
+
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_overall_stats():
     """Get overall contribution statistics"""
     db = get_db()
@@ -290,24 +389,43 @@ def get_overall_stats():
             "$group": {
                 "_id": None,
                 "total_raised": {"$sum": "$amount"},
-                "avg_contribution": {"$avg": "$amount"}
+                "avg_contribution": {"$avg": "$amount"},
+                "latest_update": {"$max": "$last_updated"},
+                "earliest_contrib": {"$min": "$contribution_date"},
+                "latest_contrib": {"$max": "$contribution_date"}
             }
         }
     ]
 
     result = list(db.contributions.aggregate(pipeline))
 
+    # Get most common cycle
+    cycle_pipeline = [
+        {"$group": {"_id": "$cycle", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 1}
+    ]
+    cycle_result = list(db.contributions.aggregate(cycle_pipeline))
+
     if result:
         return {
             "total_contributions": total_contributions,
             "total_raised": float(result[0]["total_raised"]),
-            "avg_contribution": float(result[0]["avg_contribution"])
+            "avg_contribution": float(result[0]["avg_contribution"]),
+            "last_updated": result[0].get("latest_update"),
+            "earliest_contribution": result[0].get("earliest_contrib"),
+            "latest_contribution": result[0].get("latest_contrib"),
+            "primary_cycle": cycle_result[0]["_id"] if cycle_result else "Unknown"
         }
 
     return {
         "total_contributions": 0,
         "total_raised": 0.0,
-        "avg_contribution": 0.0
+        "avg_contribution": 0.0,
+        "last_updated": None,
+        "earliest_contribution": None,
+        "latest_contribution": None,
+        "primary_cycle": "Unknown"
     }
 
 
@@ -385,8 +503,22 @@ def display_top_donors_table(donors: list):
         st.info("No donor data available")
         return
 
-    st.markdown("### 💳 Top Individual Donors")
-    st.caption("Individuals who have contributed the most")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown("### 💳 Top Individual Donors")
+        st.caption("Individuals who have contributed the most")
+    with col2:
+        # CSV Export button
+        if donors:
+            df_export = pd.DataFrame(donors)
+            csv = df_export.to_csv(index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="top_donors.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
     # Add bar chart for top 10 donors
     if len(donors) >= 3:
@@ -430,9 +562,23 @@ def display_top_employers_table(employers: list):
     if not employers:
         st.info("No employer data available")
         return
-    
-    st.markdown("### 🏢 Top Contributing Employers")
-    st.caption("Employers whose employees contribute the most")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown("### 🏢 Top Contributing Employers")
+        st.caption("Employers whose employees contribute the most")
+    with col2:
+        # CSV Export button
+        if employers:
+            df_export = pd.DataFrame(employers)
+            csv = df_export.to_csv(index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="top_employers.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
     
     # Create bar chart
     if len(employers) >= 3:
@@ -471,10 +617,55 @@ def display_state_breakdown(states: list):
     if not states:
         st.info("No state data available")
         return
-    
-    st.markdown("### 🗺️ Contributions by State")
-    st.caption("Where contributions are coming from")
-    
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown("### 🗺️ Contributions by State")
+        st.caption("Where contributions are coming from")
+    with col2:
+        # CSV Export button
+        if states:
+            df_export = pd.DataFrame(states)
+            csv = df_export.to_csv(index=False)
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name="contributions_by_state.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+    # Interactive US Map
+    if len(states) >= 1:
+        df = pd.DataFrame(states)
+
+        # Create choropleth map
+        fig_map = px.choropleth(
+            df,
+            locations='state',
+            locationmode='USA-states',
+            color='total_amount',
+            scope='usa',
+            title='Geographic Distribution of Contributions',
+            labels={'total_amount': 'Total Amount ($)', 'state': 'State'},
+            color_continuous_scale='Blues',
+            hover_data={
+                'state': True,
+                'total_amount': ':$,.2f',
+                'num_contributions': True
+            }
+        )
+
+        fig_map.update_layout(
+            geo=dict(
+                showlakes=True,
+                lakecolor='rgb(255, 255, 255)',
+            ),
+            height=500
+        )
+
+        st.plotly_chart(fig_map, use_container_width=True)
+
     # Create horizontal bar chart
     if len(states) >= 3:
         df = pd.DataFrame(states)
@@ -542,6 +733,234 @@ def display_recent_contributions(contributions: list):
         st.divider()
 
 
+def display_contribution_source_breakdown(breakdown: list, bioguide_id: str = None):
+    """Display contribution source breakdown with drill-down capability"""
+    if not breakdown:
+        st.info("No contribution source data available")
+        return
+
+    st.markdown("### 🏛️ Contribution Source Breakdown")
+    st.caption("Individual donors vs PACs and organizations")
+
+    # Create DataFrame
+    df = pd.DataFrame(breakdown)
+
+    if df.empty:
+        st.info("No contribution source data")
+        return
+
+    # Calculate totals and percentages
+    total_count = df['count'].sum()
+    total_amount = df['total'].sum()
+
+    df['pct_count'] = (df['count'] / total_count * 100).round(1)
+    df['pct_amount'] = (df['total'] / total_amount * 100).round(1)
+
+    # Create two columns for visualizations
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Pie chart by count
+        fig_count = px.pie(
+            df,
+            values='count',
+            names='type',
+            title='Contributions by Source Type',
+            color_discrete_sequence=px.colors.qualitative.Set3
+        )
+        fig_count.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_count, use_container_width=True)
+
+    with col2:
+        # Pie chart by amount
+        fig_amount = px.pie(
+            df,
+            values='total',
+            names='type',
+            title='Total Amount by Source Type',
+            color_discrete_sequence=px.colors.qualitative.Pastel
+        )
+        fig_amount.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_amount, use_container_width=True)
+
+    # Summary table
+    st.markdown("#### Detailed Breakdown")
+
+    display_df = pd.DataFrame({
+        'Source Type': df['type'],
+        'Count': df['count'],
+        '% of Contributions': df['pct_count'].apply(lambda x: f"{x}%"),
+        'Total Amount': df['total'].apply(lambda x: f"${x:,.2f}"),
+        '% of Total Raised': df['pct_amount'].apply(lambda x: f"{x}%")
+    })
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    # Drill-down section for each contributor type
+    st.markdown("#### 🔍 Drill Down by Source Type")
+    st.caption("Explore sample contributions from each source type")
+
+    for _, row in df.iterrows():
+        contrib_type = row['type']
+        count = int(row['count'])
+        total = row['total']
+
+        with st.expander(f"**{contrib_type}** - {count:,} contributions (${total:,.2f})"):
+            # Fetch sample contributions of this type
+            if bioguide_id:
+                db = get_db()
+                sample_contribs = list(db.contributions.find({
+                    "bioguide_id": bioguide_id,
+                    "contributor_type": contrib_type
+                }).sort("amount", -1).limit(10))
+
+                if sample_contribs:
+                    st.caption(f"Top 10 contributions (out of {count:,} total)")
+
+                    # Display samples in a table format
+                    for i, contrib in enumerate(sample_contribs, 1):
+                        col1, col2, col3 = st.columns([3, 2, 1])
+
+                        with col1:
+                            name = contrib.get("contributor_name", "Unknown")
+                            st.markdown(f"**{i}. {name}**")
+                            employer = contrib.get("contributor_employer", "Not provided")
+                            if employer and employer != "Not provided":
+                                st.caption(f"Employer: {employer}")
+
+                        with col2:
+                            city = contrib.get("contributor_city", "")
+                            state = contrib.get("contributor_state", "")
+                            location = f"{city}, {state}" if city and state else (state or city or "Unknown")
+                            st.caption(f"📍 {location}")
+
+                        with col3:
+                            amount = float(contrib.get("amount", 0))
+                            st.metric("", f"${amount:,.2f}")
+
+                        st.divider()
+                else:
+                    st.info("No contributions found for this type")
+
+    # Key insights
+    if len(df) > 0:
+        st.markdown("#### 💡 Key Insights")
+
+        # Show breakdown for all types
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Find individual contributions
+            individual_row = df[df['type'].str.lower().str.contains('individual', na=False)]
+            if not individual_row.empty:
+                ind_pct = individual_row['pct_amount'].iloc[0]
+                ind_count = int(individual_row['count'].iloc[0])
+                st.success(f"**Individual Donors:** {ind_pct}% of total (${individual_row['total'].iloc[0]:,.2f} from {ind_count:,} contributions)")
+
+        with col2:
+            # Find other/PAC contributions
+            pac_rows = df[~df['type'].str.lower().str.contains('individual', na=False)]
+            if not pac_rows.empty:
+                pac_total_pct = pac_rows['pct_amount'].sum()
+                pac_total_amount = pac_rows['total'].sum()
+                pac_total_count = int(pac_rows['count'].sum())
+                st.info(f"**PACs & Organizations:** {pac_total_pct:.1f}% of total (${pac_total_amount:,.2f} from {pac_total_count:,} contributions)")
+
+
+def display_contribution_size_distribution(distribution: list):
+    """Display contribution size distribution with charts"""
+    if not distribution:
+        st.info("No contribution distribution data available")
+        return
+
+    st.markdown("### 📊 Contribution Size Distribution")
+    st.caption("Breakdown by contribution amount brackets")
+
+    # Create DataFrame for easier manipulation
+    df = pd.DataFrame(distribution)
+
+    # Filter out empty brackets
+    df_filtered = df[df['count'] > 0]
+
+    if df_filtered.empty:
+        st.info("No contributions in any size bracket")
+        return
+
+    # Create two columns for the charts
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Bar chart by count
+        fig_count = px.bar(
+            df_filtered,
+            x='bracket',
+            y='count',
+            title='Number of Contributions by Size',
+            labels={'bracket': 'Contribution Size', 'count': 'Number of Contributions'},
+            color='count',
+            color_continuous_scale='Blues'
+        )
+        fig_count.update_layout(
+            xaxis_tickangle=-45,
+            showlegend=False,
+            height=400
+        )
+        st.plotly_chart(fig_count, use_container_width=True)
+
+    with col2:
+        # Bar chart by total amount
+        fig_amount = px.bar(
+            df_filtered,
+            x='bracket',
+            y='total',
+            title='Total Amount Raised by Size',
+            labels={'bracket': 'Contribution Size', 'total': 'Total Amount ($)'},
+            color='total',
+            color_continuous_scale='Greens'
+        )
+        fig_amount.update_layout(
+            xaxis_tickangle=-45,
+            showlegend=False,
+            height=400
+        )
+        st.plotly_chart(fig_amount, use_container_width=True)
+
+    # Summary table
+    st.markdown("#### Detailed Breakdown")
+
+    # Calculate percentages
+    total_count = df_filtered['count'].sum()
+    total_amount = df_filtered['total'].sum()
+
+    df_filtered['pct_count'] = (df_filtered['count'] / total_count * 100).round(1)
+    df_filtered['pct_amount'] = (df_filtered['total'] / total_amount * 100).round(1)
+
+    # Format for display
+    display_df = pd.DataFrame({
+        'Size Bracket': df_filtered['bracket'],
+        'Count': df_filtered['count'],
+        '% of Contributions': df_filtered['pct_count'].apply(lambda x: f"{x}%"),
+        'Total Amount': df_filtered['total'].apply(lambda x: f"${x:,.2f}"),
+        '% of Total Raised': df_filtered['pct_amount'].apply(lambda x: f"{x}%")
+    })
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    # Key insights
+    if not df_filtered.empty:
+        max_count_bracket = df_filtered.loc[df_filtered['count'].idxmax()]
+        max_amount_bracket = df_filtered.loc[df_filtered['total'].idxmax()]
+
+        st.markdown("#### 💡 Key Insights")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.info(f"**Most Common:** {max_count_bracket['bracket']} ({max_count_bracket['count']} contributions)")
+
+        with col2:
+            st.info(f"**Highest Revenue:** {max_amount_bracket['bracket']} (${max_amount_bracket['total']:,.2f})")
+
+
 # ============================================================================
 # Main Page
 # ============================================================================
@@ -576,57 +995,219 @@ def main():
         st.metric("Total Contributions", f"{stats['total_contributions']:,}")
         st.metric("Total Raised", f"${stats['total_raised']:,.2f}")
         st.metric("Average Amount", f"${stats['avg_contribution']:,.2f}")
-        
+
         st.divider()
-        
+
+        st.markdown("## 🔍 Data Quality")
+
+        # Election cycle
+        st.caption(f"**Election Cycle:** {stats['primary_cycle']}")
+
+        # Date range
+        if stats['earliest_contribution'] and stats['latest_contribution']:
+            earliest = stats['earliest_contribution']
+            latest = stats['latest_contribution']
+
+            if isinstance(earliest, datetime):
+                earliest_str = earliest.strftime("%b %Y")
+            else:
+                earliest_str = str(earliest)[:7]
+
+            if isinstance(latest, datetime):
+                latest_str = latest.strftime("%b %Y")
+            else:
+                latest_str = str(latest)[:7]
+
+            st.caption(f"**Contribution Period:** {earliest_str} - {latest_str}")
+
+        # Last data sync
+        if stats['last_updated']:
+            last_update = stats['last_updated']
+
+            if isinstance(last_update, datetime):
+                days_old = (datetime.utcnow() - last_update).days
+
+                if days_old == 0:
+                    freshness = "🟢 Today"
+                elif days_old <= 7:
+                    freshness = f"🟢 {days_old} days ago"
+                elif days_old <= 30:
+                    freshness = f"🟡 {days_old} days ago"
+                else:
+                    freshness = f"🔴 {days_old} days ago"
+
+                st.caption(f"**Last Synced:** {freshness}")
+            else:
+                st.caption(f"**Last Synced:** {str(last_update)[:10]}")
+
+        st.caption("💡 Update data: `scripts/csv-files/update_csv_from_api.py --contributions`")
+
+        st.divider()
+
         st.markdown("## ℹ️ Data Source")
         st.caption("Campaign finance data from FEC filings")
         st.caption("Data may be incomplete or delayed")
-        
+
         st.divider()
-        
+
         st.markdown("## 💡 Tip")
         st.caption("Use the search feature at the bottom to find contributions by employer, state, or amount range")
     
     # ========================================================================
     # Politician Selector
     # ========================================================================
-    
+
     st.subheader("Select a Politician")
-    
+
     politicians = get_politicians_with_contributions()
-    
+
     if not politicians:
         st.error("No politicians with contribution data found")
         st.info("Run `populate_fec_ids.py` and `sync_fec_contributions.py` to add data")
         return
-    
+
     # Create dropdown options
     politician_options = {
         f"{p['full_name']} ({p['party']}-{p['state']})": p
         for p in politicians
     }
-    
+
+    # Add comparison mode toggle
+    compare_mode = st.checkbox("📊 Compare Multiple Politicians", value=False)
+
+    st.divider()
+
+    if compare_mode:
+        # ====================================================================
+        # COMPARISON MODE
+        # ====================================================================
+        st.subheader("Compare Politicians")
+
+        # Multi-select for politicians
+        selected_names = st.multiselect(
+            "Select 2-4 politicians to compare",
+            options=list(politician_options.keys()),
+            max_selections=4,
+            help="Choose multiple politicians to compare their campaign finance data"
+        )
+
+        if len(selected_names) < 2:
+            st.info("👆 Select at least 2 politicians to see a comparison")
+            return
+
+        # Get bioguide IDs for selected politicians
+        selected_politicians = [politician_options[name] for name in selected_names]
+        bioguide_ids = [p["bioguide_id"] for p in selected_politicians]
+
+        # Fetch summaries for all selected politicians
+        db = get_db()
+        summaries = {}
+        for pol, bioguide_id in zip(selected_politicians, bioguide_ids):
+            full_pol = db.politicians.find_one({"bioguide_id": bioguide_id})
+            if full_pol:
+                pol = full_pol
+            summary = get_contribution_summary(bioguide_id)
+            summaries[bioguide_id] = {
+                "politician": pol,
+                "summary": summary
+            }
+
+        # Display comparison
+        st.markdown("### 💰 Fundraising Comparison")
+
+        # Create comparison metrics
+        cols = st.columns(len(selected_politicians))
+
+        for i, (name, pol) in enumerate(zip(selected_names, selected_politicians)):
+            bioguide_id = pol["bioguide_id"]
+            summary = summaries[bioguide_id]["summary"]
+            politician = summaries[bioguide_id]["politician"]
+
+            with cols[i]:
+                st.markdown(f"**{politician.get('full_name', 'Unknown')}**")
+                party = politician.get('party', '?')
+                state = politician.get('state', '??')
+                st.caption(f"{party}-{state}")
+
+                st.metric("Total Raised", f"${summary['total_raised']:,.2f}")
+                st.metric("Contributions", f"{summary['total_contributions']:,}")
+                st.metric("Avg Amount", f"${summary['avg_contribution']:,.2f}")
+
+        st.divider()
+
+        # Comparison bar chart - Total raised
+        st.markdown("### 📊 Total Contributions Raised")
+
+        chart_data = []
+        for name, pol in zip(selected_names, selected_politicians):
+            bioguide_id = pol["bioguide_id"]
+            summary = summaries[bioguide_id]["summary"]
+            politician = summaries[bioguide_id]["politician"]
+            chart_data.append({
+                "Politician": politician.get('full_name', 'Unknown'),
+                "Total Raised": summary['total_raised']
+            })
+
+        df_chart = pd.DataFrame(chart_data)
+        fig = px.bar(
+            df_chart,
+            x="Politician",
+            y="Total Raised",
+            title="Total Contributions Raised",
+            color="Total Raised",
+            color_continuous_scale="Blues"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Source breakdown comparison
+        st.markdown("### 🏛️ Source Breakdown Comparison")
+
+        source_cols = st.columns(len(selected_politicians))
+        for i, pol in enumerate(selected_politicians):
+            bioguide_id = pol["bioguide_id"]
+            politician = summaries[bioguide_id]["politician"]
+
+            with source_cols[i]:
+                st.markdown(f"**{politician.get('full_name', 'Unknown')}**")
+                breakdown = get_contribution_source_breakdown(bioguide_id)
+
+                if breakdown:
+                    df_breakdown = pd.DataFrame(breakdown)
+                    fig = px.pie(
+                        df_breakdown,
+                        values='total',
+                        names='type',
+                        title=f"{politician.get('full_name', 'Unknown')[:20]}..."
+                    )
+                    fig.update_traces(textposition='inside', textinfo='percent')
+                    st.plotly_chart(fig, use_container_width=True)
+
+        return  # Exit here for comparison mode
+
+    # ====================================================================
+    # SINGLE POLITICIAN MODE (original flow)
+    # ====================================================================
+
     selected_name = st.selectbox(
         "Choose a legislator to view their campaign contributions",
         options=list(politician_options.keys()),
         index=0
     )
-    
+
     if not selected_name:
         st.info("👆 Select a politician to view their contributions")
         return
-    
+
     politician = politician_options[selected_name]
     bioguide_id = politician["bioguide_id"]
-    
+
     # Fetch full politician details from database
     db = get_db()
     full_politician = db.politicians.find_one({"bioguide_id": bioguide_id})
-    
+
     if full_politician:
         politician = full_politician
-    
+
     st.divider()
     
     # ========================================================================
@@ -653,11 +1234,13 @@ def main():
     # Tabs for Different Views
     # ========================================================================
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📈 Timeline",
         "💳 Top Donors",
         "🏢 Top Employers",
         "🗺️ By State",
+        "📊 Size Distribution",
+        "🏛️ Source Breakdown",
         "⏱️ Recent Contributions"
     ])
 
@@ -678,6 +1261,14 @@ def main():
         display_state_breakdown(by_state)
 
     with tab5:
+        size_distribution = get_contribution_size_distribution(bioguide_id)
+        display_contribution_size_distribution(size_distribution)
+
+    with tab6:
+        source_breakdown = get_contribution_source_breakdown(bioguide_id)
+        display_contribution_source_breakdown(source_breakdown, bioguide_id)
+
+    with tab7:
         recent = get_recent_contributions(bioguide_id, limit=25)
         display_recent_contributions(recent)
     
@@ -711,7 +1302,7 @@ def main():
         )
     
     amount_col1, amount_col2 = st.columns(2)
-    
+
     with amount_col1:
         min_amount = st.number_input(
             "Minimum Amount ($)",
@@ -719,7 +1310,7 @@ def main():
             value=0.0,
             step=100.0
         )
-    
+
     with amount_col2:
         max_amount = st.number_input(
             "Maximum Amount ($)",
@@ -727,7 +1318,23 @@ def main():
             value=10000.0,
             step=100.0
         )
-    
+
+    date_col1, date_col2 = st.columns(2)
+
+    with date_col1:
+        start_date = st.date_input(
+            "Start Date",
+            value=None,
+            help="Filter contributions from this date onwards"
+        )
+
+    with date_col2:
+        end_date = st.date_input(
+            "End Date",
+            value=None,
+            help="Filter contributions up to this date"
+        )
+
     if st.button("🔍 Search", type="primary"):
         with st.spinner("Searching contributions..."):
             search_results = search_contributions(
@@ -735,6 +1342,8 @@ def main():
                 state=state_search if state_search != "All States" else None,
                 min_amount=min_amount if min_amount > 0 else None,
                 max_amount=max_amount if max_amount < 10000 else None,
+                start_date=start_date if start_date else None,
+                end_date=end_date if end_date else None,
                 limit=100
             )
         
