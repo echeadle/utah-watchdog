@@ -232,7 +232,12 @@ def search_contributions(
         filter_dict["bioguide_id"] = bioguide_id
 
     if employer:
-        filter_dict["contributor_employer"] = {"$regex": employer, "$options": "i"}
+        # Search in BOTH contributor_name AND contributor_employer fields
+        # Support partial word matching (e.g., "Alterman" or "management")
+        filter_dict["$or"] = [
+            {"contributor_employer": {"$regex": employer, "$options": "i"}},
+            {"contributor_name": {"$regex": employer, "$options": "i"}}
+        ]
 
     if state:
         filter_dict["contributor_state"] = state
@@ -1665,9 +1670,9 @@ def main():
     
     with search_col1:
         employer_search = st.text_input(
-            "Employer/Organization",
-            placeholder="e.g., Google, Applied Materials",
-            help="Case-insensitive partial match"
+            "Contributor Name or Employer",
+            placeholder="e.g., Alterman, Google, management",
+            help="Searches both contributor names and employers. Case-insensitive, partial words work (e.g., 'Alterman' finds 'ALTERMAN MANAGEMENT GROUP')"
         )
     
     with search_col2:
