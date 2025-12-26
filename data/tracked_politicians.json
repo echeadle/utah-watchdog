@@ -1,0 +1,100 @@
+{
+  "$schema": "./tracked_politicians_schema.json",
+  "description": "Canonical list of Utah federal politicians to track, including historical figures",
+  "last_updated": "2025-12-26",
+  "politicians": [
+    {
+      "bioguide_id": "L000577",
+      "full_name": "Mike Lee",
+      "identifiers": {
+        "fec_candidate_id": "S0UT00165",
+        "opensecrets_id": "N00031696",
+        "govtrack_id": "412495"
+      },
+      "tracking_reason": "Current Utah Senator",
+      "priority": "high"
+    },
+    {
+      "bioguide_id": "R000615",
+      "full_name": "Mitt Romney",
+      "identifiers": {
+        "fec_candidate_id": "S8UT00260",
+        "opensecrets_id": "N00000286",
+        "govtrack_id": "412841"
+      },
+      "tracking_reason": "Utah Senator (retiring 2025)",
+      "priority": "high",
+      "notes": "Term ends January 2025, not seeking reelection"
+    },
+    {
+      "bioguide_id": "C001114",
+      "full_name": "John Curtis",
+      "identifiers": {
+        "fec_candidate_id": "H8UT03132",
+        "fec_senate_candidate_id": "S4UT00322",
+        "opensecrets_id": "N00041091",
+        "govtrack_id": "412740"
+      },
+      "tracking_reason": "Representative UT-03 (2017-2025), Senator-elect (2025-)",
+      "priority": "high",
+      "notes": "Transitioning from House to Senate, replacing Romney"
+    },
+    {
+      "bioguide_id": "M001221",
+      "full_name": "Blake Moore",
+      "identifiers": {
+        "fec_candidate_id": "H0UT01133",
+        "opensecrets_id": "N00045426",
+        "govtrack_id": "456824"
+      },
+      "tracking_reason": "Current Representative UT-01",
+      "priority": "high"
+    },
+    {
+      "bioguide_id": "M001135",
+      "full_name": "Celeste Maloy",
+      "identifiers": {
+        "fec_candidate_id": "H2UT02059",
+        "opensecrets_id": "N00052221",
+        "govtrack_id": "456856"
+      },
+      "tracking_reason": "Current Representative UT-02",
+      "priority": "high"
+    },
+    {
+      "bioguide_id": "O000086",
+      "full_name": "Burgess Owens",
+      "identifiers": {
+        "fec_candidate_id": "H0UT04075",
+        "opensecrets_id": "N00045255",
+        "govtrack_id": "456823"
+      },
+      "tracking_reason": "Current Representative UT-04",
+      "priority": "high"
+    },
+    {
+      "bioguide_id": "H001032",
+      "full_name": "Orrin Hatch",
+      "identifiers": {
+        "fec_candidate_id": "S6UT00023",
+        "opensecrets_id": "N00009869",
+        "govtrack_id": "300044"
+      },
+      "tracking_reason": "Former Senator (1977-2019), historical data",
+      "priority": "medium",
+      "notes": "Retired, keep for historical campaign finance data"
+    },
+    {
+      "bioguide_id": "C001076",
+      "full_name": "Jason Chaffetz",
+      "identifiers": {
+        "fec_candidate_id": "H8UT03157",
+        "opensecrets_id": "N00029231",
+        "govtrack_id": "412271"
+      },
+      "tracking_reason": "Former Representative UT-03 (2009-2017), historical data",
+      "priority": "low",
+      "notes": "Resigned 2017, keep for historical data"
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://utah-watchdog.org/schemas/tracked_politicians.json",
+  "title": "Tracked Politicians Registry",
+  "description": "Schema for the canonical list of Utah politicians to track",
+  "type": "object",
+  "required": ["politicians", "last_updated"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of this registry"
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date",
+      "description": "Date this registry was last updated (YYYY-MM-DD)"
+    },
+    "politicians": {
+      "type": "array",
+      "description": "List of politicians to track",
+      "items": {
+        "$ref": "#/definitions/politician"
+      }
+    }
+  },
+  "definitions": {
+    "politician": {
+      "type": "object",
+      "required": ["bioguide_id", "full_name", "tracking_reason"],
+      "properties": {
+        "bioguide_id": {
+          "type": "string",
+          "pattern": "^[A-Z][0-9]{6}$",
+          "description": "Congressional Bioguide ID (canonical identifier)"
+        },
+        "full_name": {
+          "type": "string",
+          "description": "Full name of the politician"
+        },
+        "identifiers": {
+          "type": "object",
+          "description": "External identifiers across various systems",
+          "properties": {
+            "fec_candidate_id": {
+              "type": "string",
+              "description": "FEC candidate ID (format varies)"
+            },
+            "fec_senate_candidate_id": {
+              "type": "string",
+              "description": "Separate FEC ID if they've run for Senate"
+            },
+            "opensecrets_id": {
+              "type": "string",
+              "description": "OpenSecrets/Center for Responsive Politics ID"
+            },
+            "govtrack_id": {
+              "type": "string",
+              "description": "GovTrack.us ID"
+            },
+            "wikidata_id": {
+              "type": "string",
+              "description": "Wikidata Q-number"
+            },
+            "votesmart_id": {
+              "type": "string",
+              "description": "Vote Smart ID"
+            }
+          }
+        },
+        "tracking_reason": {
+          "type": "string",
+          "description": "Why we're tracking this politician"
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["high", "medium", "low"],
+          "description": "Priority for data updates (high = current officeholders)"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about this politician"
+        }
+      }
+    }
+  }
+}

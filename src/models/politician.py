@@ -6,7 +6,7 @@ Defines the structure for federal and state legislators.
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 
 from pydantic import BaseModel, Field
@@ -24,6 +24,18 @@ class Party(str, Enum):
     REPUBLICAN = "R"
     INDEPENDENT = "I"
     OTHER = "O"
+
+
+class OfficeTerm(BaseModel):
+    """A single term in office."""
+    chamber: Chamber
+    state: str = Field(..., min_length=2, max_length=2)
+    district: Optional[int] = None
+    term_start: Optional[date] = Field(None, description="Start date of term")
+    term_end: Optional[date] = Field(None, description="End date of term")
+    party: Optional[Party] = Field(None, description="Party during this term (can change)")
+    election_type: Optional[str] = Field(None, description="regular, special, etc.")
+    notes: Optional[str] = None
 
 
 class Politician(BaseModel):
@@ -57,7 +69,33 @@ class Politician(BaseModel):
     phone: Optional[str] = None
     office: Optional[str] = None
     committees: List[dict] = Field(default_factory=list, description="Committee memberships")
-    
+
+    # Office history - track all positions held
+    office_history: List[OfficeTerm] = Field(
+        default_factory=list,
+        description="Historical record of all offices held"
+    )
+
+    # External identifiers across various systems
+    identifiers: Dict[str, str] = Field(
+        default_factory=dict,
+        description="IDs from various systems (FEC, OpenSecrets, GovTrack, etc.)"
+    )
+
+    # Tracking metadata
+    tracked: bool = Field(
+        default=False,
+        description="Manually tracked politician (won't be removed)"
+    )
+    tracking_reason: Optional[str] = Field(
+        None,
+        description="Why this politician is being tracked"
+    )
+    priority: Optional[str] = Field(
+        None,
+        description="Update priority: high, medium, low"
+    )
+
     # Metadata
     last_updated: datetime = Field(default_factory=datetime.utcnow)
     
