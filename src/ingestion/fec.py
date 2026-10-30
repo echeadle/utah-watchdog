@@ -75,6 +75,46 @@ class FECIngester(BaseIngester[Contribution]):
         
         return "Unknown Candidate"
     
+    async def fetch_committee_id(self, candidate_id: str) -> Optional[str]:
+        """
+        Look up the principal campaign committee ID for a candidate.
+
+        Args:
+            candidate_id: FEC candidate ID
+
+        Returns:
+            Committee ID of the principal campaign committee, or None
+        """
+        endpoint = f"{self.BASE_URL}/candidate/{candidate_id}/committees/"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.get(
+                    endpoint,
+                    params={"api_key": self.api_key}
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                # Find the principal campaign committee
+                for committee in data.get("results", []):
+                    if committee.get("designation") == "P":  # P = Principal campaign committee
+                        committee_id = committee.get("committee_id")
+                        self.logger.info(f"Found principal committee: {committee_id}")
+                        return committee_id
+
+                # If no principal committee, return the first committee
+                results = data.get("results", [])
+                if results:
+                    committee_id = results[0].get("committee_id")
+                    self.logger.warning(f"No principal committee found, using first: {committee_id}")
+                    return committee_id
+
+            except Exception as e:
+                self.logger.error(f"Error fetching committee ID: {e}")
+
+        return None
+
     async def fetch_data(
         self,
         candidate_id: Optional[str] = None,
@@ -85,77 +125,95 @@ class FECIngester(BaseIngester[Contribution]):
     ) -> AsyncGenerator[dict, None]:
         """
         Fetch individual contributions from FEC API.
-        
+
+        IMPORTANT: The FEC API has a known pagination bug when using page numbers.
+        This method uses last_index cursor-based pagination instead.
+
         Args:
             candidate_id: FEC candidate ID (e.g., "S2UT00106" for Mike Lee)
-            committee_id: FEC committee ID (alternative to candidate_id)
+                         Will be converted to committee_id automatically
+            committee_id: FEC committee ID (preferred over candidate_id)
             cycle: Election cycle year (e.g., 2024)
             per_page: Results per page (max 100)
             max_pages: Maximum pages to fetch (None = unlimited, but be careful!)
-        
+
         Yields:
             Raw contribution dictionaries from FEC API
         """
         if not candidate_id and not committee_id:
             raise ValueError("Must provide either candidate_id or committee_id")
-        
+
+        # Convert candidate_id to committee_id if needed
+        # The FEC API's candidate_id filter doesn't work properly for Schedule A
+        if candidate_id and not committee_id:
+            self.logger.info(f"Converting candidate_id to committee_id for proper filtering...")
+            committee_id = await self.fetch_committee_id(candidate_id)
+            if not committee_id:
+                raise ValueError(f"Could not find committee for candidate {candidate_id}")
+
         # Look up candidate name once
         if candidate_id and not self.candidate_name:
             self.candidate_name = await self.fetch_candidate_name(candidate_id)
             self.logger.info(f"Fetching contributions for: {self.candidate_name}")
-        
+
         endpoint = f"{self.BASE_URL}/schedules/schedule_a/"
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             page = 1
-            
-            while True:  # Changed from while page <= max_pages
+            last_index = None  # Cursor for pagination
+            last_contribution_receipt_date = None  # For sorted queries
+
+            while True:
                 # Check max_pages limit
                 if max_pages is not None and page > max_pages:
                     self.logger.info(f"Reached max_pages limit ({max_pages})")
                     break
+
                 params = {
                     "api_key": self.api_key,
                     "two_year_transaction_period": cycle,
                     "per_page": per_page,
-                    "page": page,
-                    "sort": "-contribution_receipt_date"
+                    "sort": "-contribution_receipt_date",
+                    "committee_id": committee_id  # Use committee_id instead of candidate_id
                 }
-                
-                # Filter by candidate or committee
-                if candidate_id:
-                    params["candidate_id"] = candidate_id
-                elif committee_id:
-                    params["committee_id"] = committee_id
-                
+
+                # Use cursor-based pagination (both fields required for sorted queries)
+                if last_index is not None and last_contribution_receipt_date is not None:
+                    params["last_index"] = last_index
+                    params["last_contribution_receipt_date"] = last_contribution_receipt_date
+
                 self.logger.info(
                     f"Fetching FEC contributions: "
-                    f"candidate={candidate_id}, cycle={cycle}, page={page}"
+                    f"committee={committee_id}, cycle={cycle}, page={page}"
                 )
-                
+
                 try:
                     response = await client.get(endpoint, params=params)
                     response.raise_for_status()
                     data = response.json()
-                    
+
                     results = data.get("results", [])
                     if not results:
                         self.logger.info("No more results")
                         break
-                    
+
                     for item in results:
                         yield item
-                    
-                    # Check if there are more pages
+
+                    # Get cursor values for the next page
                     pagination = data.get("pagination", {})
-                    total_pages = pagination.get("pages", 0)
-                    
-                    if page >= total_pages:
-                        self.logger.info(f"Reached last page ({total_pages})")
+                    last_indexes = pagination.get("last_indexes", {})
+                    new_last_index = last_indexes.get("last_index")
+                    new_last_date = last_indexes.get("last_contribution_receipt_date")
+
+                    if not new_last_index or (new_last_index == last_index and new_last_date == last_contribution_receipt_date):
+                        self.logger.info("No more pages available")
                         break
-                    
+
+                    last_index = new_last_index
+                    last_contribution_receipt_date = new_last_date
                     page += 1
-                    
+
                 except httpx.HTTPError as e:
                     self.logger.error(f"HTTP error fetching FEC data: {e}")
                     break
